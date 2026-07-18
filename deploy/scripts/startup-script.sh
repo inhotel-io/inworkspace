@@ -68,6 +68,19 @@ cat > "${MNT}/etc/config.json" <<EOF
 EOF
 chown 2000:2000 "${MNT}/etc/config.json"
 
+# --- host firewall: open the mail/admin ports -----------------------------------
+# Container-Optimized OS ships with an iptables INPUT policy of DROP that only
+# permits SSH/ICMP/established. With --network host the container binds the ports
+# but COS still drops inbound unless we ACCEPT them here. iptables is reset on every
+# boot, so this runs on each startup. Source-based access control stays with the VPC
+# firewall (e.g. 443/80 public, the rest IAP-only); this host rule only unblocks the
+# ports so packets reach Stalwart.
+STALWART_PORTS="25,80,143,443,465,587,993,995,4190,8080"
+if ! iptables -C INPUT -p tcp -m multiport --dports "${STALWART_PORTS}" -j ACCEPT 2>/dev/null; then
+  iptables -A INPUT -p tcp -m multiport --dports "${STALWART_PORTS}" -j ACCEPT
+  log "host firewall: opened tcp ${STALWART_PORTS}"
+fi
+
 # --- run the container ----------------------------------------------------------
 # host networking so all mail ports bind on the VM (firewall restricts access in
 # safe mode). Docker's default cap set includes NET_BIND_SERVICE, which combined

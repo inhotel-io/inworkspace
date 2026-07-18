@@ -88,6 +88,8 @@ _Record anything that differed from the runbook, rollbacks, or surprises._
 | 2026-07-18 | Cloud SQL rejected the first generated Postgres password (policy: needs upper+lower+digit+special). | Regenerated a compliant password; created secret version 2. |
 | 2026-07-18 | Existing Cloud SQL has **public IP only** (no Private IP), so a `--no-address` VM couldn't reach it. | VM given an **ephemeral external IP** for egress; **all inbound** locked to the IAP range by firewall (external IP does not open inbound). Follow-up: reserve a static egress IP or move to Cloud SQL Auth Proxy / Private IP. |
 | 2026-07-18 | Deploy switched from konlet `create-with-container` to plain COS + startup-script `docker run`. | Keeps DB/admin secrets out of instance metadata (fetched from Secret Manager at boot into container env only). |
+| 2026-07-18 | Public access to :443 timed out even though VPC firewall allowed it and GCP connectivity test said REACHABLE. Root cause: **COS host iptables `INPUT` policy is `DROP`** (only SSH/ICMP/established allowed); with `--network host` the container binds the ports but COS drops inbound. | Added `iptables -A INPUT -p tcp -m multiport --dports 25,80,143,443,465,587,993,995,4190,8080 -j ACCEPT` on the VM, and baked it into `startup-script.sh` so it re-applies on every boot (iptables resets on reboot). Public `https://<static-ip>/login` then returned 200. |
+| 2026-07-18 | Reserved the ephemeral IP as a static address `stalwart-ip` (34.65.x, Premium) and opened `stalwart-web-public` (tcp:80,443 from 0.0.0.0/0) so the admin is reachable by IP. | Admin is now internet-exposed with a self-signed cert (`CN=rcgen self signed cert`). Follow-up: link domain + ACME for a trusted cert, and restrict access to trusted sources. |
 
 ---
 
