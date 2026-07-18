@@ -1,0 +1,12 @@
+{
+  "@type": "PostgreSql",
+  "host": "__POSTGRES_HOST__",
+  "port": 5432,
+  "database": "stalwart",
+  "authUsername": "stalwart",
+  "authSecret": { "@type": "EnvironmentVariable", "variableName": "POSTGRES_PASSWORD" },
+  "useTls": true,
+  "allowInvalidCerts": true,
+  "poolMaxConnections": 10,
+  "poolRecyclingMethod": "fast"
+}

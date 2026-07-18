@@ -1,0 +1,50 @@
+# =============================================================================
+# deploy/ — keep secrets and real values OUT of this PUBLIC repo.
+# =============================================================================
+
+# ---- Environment files (real values live here; never commit) ----
+.env
+.env.*
+!.env.example          # the placeholder template IS tracked
+
+# ---- Rendered / generated config (contains real host/IP; password is env-ref
+#      but host must not be committed) ----
+config/config.json
+config/config.json.rendered
+config/*.rendered
+*.generated
+*.rendered
+
+# ---- Logs that may contain real IPs / ids / command output ----
+*.log
+# NOTE: DEPLOYMENT_LOG.md is Markdown, not *.log, so it stays tracked.
+#       Keep real values out of it (see the header in that file).
+
+# ---- Terraform / OpenTofu state (may embed secrets & real infra values) ----
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+
+# ---- Secret material / credentials ----
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*-key.json               # GCP service-account key files (avoid these entirely)
+*credentials*.json
+sa-*.json
+secrets/
+*.secret
+stalwart.env             # runtime env file assembled from Secret Manager
+
+# ---- Local scratch / editor cruft ----
+*.bak
+*.tmp
+*~
+.DS_Store
