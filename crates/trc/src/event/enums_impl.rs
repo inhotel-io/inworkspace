@@ -6,7 +6,7 @@
 
 // This file is auto-generated. Do not edit directly.
 
-use crate::{event::enums::*, Level};
+use crate::{Level, event::enums::*};
 use std::borrow::Cow;
 
 impl EventType {
@@ -584,6 +584,7 @@ impl EventType {
             b"store.cache-hit" => EventType::Store(StoreEvent::CacheHit),
             b"store.cache-stale" => EventType::Store(StoreEvent::CacheStale),
             b"store.cache-update" => EventType::Store(StoreEvent::CacheUpdate),
+            b"store.cache-entry-too-large" => EventType::Store(StoreEvent::CacheEntryTooLarge),
             b"store.blob-missing-marker" => EventType::Store(StoreEvent::BlobMissingMarker),
             b"store.data-write" => EventType::Store(StoreEvent::DataWrite),
             b"store.data-iterate" => EventType::Store(StoreEvent::DataIterate),
@@ -1341,6 +1342,7 @@ impl EventType {
             EventType::Store(StoreEvent::CacheHit) => "store.cache-hit",
             EventType::Store(StoreEvent::CacheStale) => "store.cache-stale",
             EventType::Store(StoreEvent::CacheUpdate) => "store.cache-update",
+            EventType::Store(StoreEvent::CacheEntryTooLarge) => "store.cache-entry-too-large",
             EventType::Store(StoreEvent::BlobMissingMarker) => "store.blob-missing-marker",
             EventType::Store(StoreEvent::DataWrite) => "store.data-write",
             EventType::Store(StoreEvent::DataIterate) => "store.data-iterate",
@@ -1997,6 +1999,7 @@ impl EventType {
             EventType::Store(StoreEvent::CacheHit) => 51,
             EventType::Store(StoreEvent::CacheStale) => 52,
             EventType::Store(StoreEvent::CacheUpdate) => 577,
+            EventType::Store(StoreEvent::CacheEntryTooLarge) => 633,
             EventType::Store(StoreEvent::BlobMissingMarker) => 507,
             EventType::Store(StoreEvent::DataWrite) => 513,
             EventType::Store(StoreEvent::DataIterate) => 512,
@@ -2673,6 +2676,7 @@ impl EventType {
             51 => Some(EventType::Store(StoreEvent::CacheHit)),
             52 => Some(EventType::Store(StoreEvent::CacheStale)),
             577 => Some(EventType::Store(StoreEvent::CacheUpdate)),
+            633 => Some(EventType::Store(StoreEvent::CacheEntryTooLarge)),
             507 => Some(EventType::Store(StoreEvent::BlobMissingMarker)),
             513 => Some(EventType::Store(StoreEvent::DataWrite)),
             512 => Some(EventType::Store(StoreEvent::DataIterate)),
@@ -3079,6 +3083,7 @@ impl EventType {
             EventType::Smtp(SmtpEvent::MissingLocalHostname) => Level::Warn,
             EventType::Spam(SpamEvent::TrainSampleNotFound) => Level::Warn,
             EventType::Store(StoreEvent::HttpStoreError) => Level::Warn,
+            EventType::Store(StoreEvent::CacheEntryTooLarge) => Level::Warn,
             EventType::Store(StoreEvent::BlobMissingMarker) => Level::Warn,
             EventType::TaskManager(TaskManagerEvent::TaskFailed) => Level::Warn,
             EventType::Telemetry(TelemetryEvent::AlertEvent) => Level::Warn,
@@ -3798,6 +3803,7 @@ impl EventType {
             EventType::Store(StoreEvent::CacheHit) => "Cache hit",
             EventType::Store(StoreEvent::CacheStale) => "Cache is stale",
             EventType::Store(StoreEvent::CacheUpdate) => "Cache update",
+            EventType::Store(StoreEvent::CacheEntryTooLarge) => "Cache entry too large",
             EventType::Store(StoreEvent::BlobMissingMarker) => "Blob missing marker",
             EventType::Store(StoreEvent::DataWrite) => "Write batch operation",
             EventType::Store(StoreEvent::DataIterate) => "Data store iteration operation",
@@ -3887,7 +3893,9 @@ impl EventType {
             EventType::Auth(AuthEvent::Success) => "Authentication error",
             EventType::Auth(AuthEvent::Failed) => "Authentication failed",
             EventType::Auth(AuthEvent::TokenExpired) => "Authentication error",
-            EventType::Auth(AuthEvent::MfaRequired) => "This account requires multi-factor authentication. Alternatively, you can use an app password if your account has one.",
+            EventType::Auth(AuthEvent::MfaRequired) => {
+                "This account requires multi-factor authentication. Alternatively, you can use an app password if your account has one."
+            }
             EventType::Auth(AuthEvent::TooManyAttempts) => "Too many authentication attempts",
             EventType::Auth(AuthEvent::ClientRegistration) => "Authentication error",
             EventType::Auth(AuthEvent::Error) => "Authentication error",
@@ -3940,7 +3948,9 @@ impl EventType {
             EventType::Jmap(JmapEvent::InvalidResultReference) => "Invalid result reference",
             EventType::Jmap(JmapEvent::Forbidden) => "Forbidden",
             EventType::Jmap(JmapEvent::AccountNotFound) => "Account not found",
-            EventType::Jmap(JmapEvent::AccountNotSupportedByMethod) => "Account not supported by method",
+            EventType::Jmap(JmapEvent::AccountNotSupportedByMethod) => {
+                "Account not supported by method"
+            }
             EventType::Jmap(JmapEvent::AccountReadOnly) => "Account read-only",
             EventType::Jmap(JmapEvent::NotFound) => "Not found",
             EventType::Jmap(JmapEvent::CannotCalculateChanges) => "Cannot calculate changes",
@@ -4109,7 +4119,9 @@ impl EventType {
             EventType::Smtp(SmtpEvent::UnsupportedParameter) => "SMTP error",
             EventType::Smtp(SmtpEvent::SyntaxError) => "SMTP error",
             EventType::Smtp(SmtpEvent::RequestTooLarge) => "SMTP error",
-            EventType::Store(StoreEvent::AssertValueFailed) => "Another process has modified the value",
+            EventType::Store(StoreEvent::AssertValueFailed) => {
+                "Another process has modified the value"
+            }
             EventType::Store(StoreEvent::FoundationdbError) => "FoundationDB error",
             EventType::Store(StoreEvent::MysqlError) => "MySQL error",
             EventType::Store(StoreEvent::PostgresqlError) => "PostgreSQL error",
@@ -4136,6 +4148,7 @@ impl EventType {
             EventType::Store(StoreEvent::CacheHit) => "Store error",
             EventType::Store(StoreEvent::CacheStale) => "Store error",
             EventType::Store(StoreEvent::CacheUpdate) => "Store error",
+            EventType::Store(StoreEvent::CacheEntryTooLarge) => "Cache entry too large to store",
             EventType::Store(StoreEvent::BlobMissingMarker) => "Blob is missing marker",
             EventType::Store(StoreEvent::DataWrite) => "Store error",
             EventType::Store(StoreEvent::DataIterate) => "Store error",
@@ -4722,6 +4735,7 @@ impl EventType {
             EventType::Store(StoreEvent::CacheHit),
             EventType::Store(StoreEvent::CacheStale),
             EventType::Store(StoreEvent::CacheUpdate),
+            EventType::Store(StoreEvent::CacheEntryTooLarge),
             EventType::Store(StoreEvent::BlobMissingMarker),
             EventType::Store(StoreEvent::DataWrite),
             EventType::Store(StoreEvent::DataIterate),

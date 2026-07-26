@@ -6,8 +6,9 @@
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use p256::{
+    SecretKey,
     ecdsa::{Signature, SigningKey, signature::Signer},
-    pkcs8::DecodePrivateKey,
+    pkcs8::{DecodePrivateKey, PrivateKeyInfo, der::SecretDocument},
 };
 
 const VAPID_TOKEN_TTL: u64 = 12 * 60 * 60;
@@ -51,9 +52,27 @@ pub struct VapidKey {
 
 impl VapidKey {
     pub fn from_pkcs8_pem(pem: &str) -> Result<Self, String> {
-        SigningKey::from_pkcs8_pem(pem)
-            .map(Self::from_signing_key)
-            .map_err(|err| err.to_string())
+        let pem = pem.trim_start_matches('\u{feff}').trim();
+
+        if let Ok(key) = SigningKey::from_pkcs8_pem(pem) {
+            return Ok(Self::from_signing_key(key));
+        }
+        if let Ok(secret) = SecretKey::from_sec1_pem(pem) {
+            return Ok(Self::from_signing_key(secret.into()));
+        }
+        if let Some(secret) = secret_key_from_explicit_params(pem) {
+            return Ok(Self::from_signing_key(secret.into()));
+        }
+
+        Err(SigningKey::from_pkcs8_pem(pem)
+            .err()
+            .map(|err| {
+                format!(
+                    "{err}. Re-encode the key as named-curve PKCS#8, \
+                     e.g. `openssl pkey -in key.pem -out key_pkcs8.pem`."
+                )
+            })
+            .unwrap_or_else(|| "unsupported VAPID key encoding".to_string()))
     }
 
     fn from_signing_key(signing_key: SigningKey) -> Self {
@@ -129,6 +148,12 @@ fn endpoint_origin(url: &str) -> Option<String> {
         }
         _ => Some(format!("{scheme}://{host}")),
     }
+}
+
+fn secret_key_from_explicit_params(pem: &str) -> Option<SecretKey> {
+    let (_, document) = SecretDocument::from_pem(pem).ok()?;
+    let private_key_info = PrivateKeyInfo::try_from(document.as_bytes()).ok()?;
+    SecretKey::from_sec1_der(private_key_info.private_key).ok()
 }
 
 #[cfg(test)]
@@ -209,6 +234,68 @@ mod tests {
         assert_eq!(claims["aud"], "https://push.example.com");
         assert_eq!(claims["sub"], "mailto:admin@example.org");
         assert_eq!(claims["exp"], now + VAPID_TOKEN_TTL);
+    }
+
+    const SEC1_PEM: &str = "-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIP4Zv7be5hDH0x4ur6ditW+whzyZBXK1Vyjn6aIDo0jhoAoGCCqGSM49
+AwEHoUQDQgAEVc4PXr+z61s9/dIas44+S0Nza3gm1UW/avddp99dUsEi3JV0H4Yk
+1yfqVJ/O9KPvQ69uMAY0t3A5lx/GvOOZfg==
+-----END EC PRIVATE KEY-----";
+
+    const PKCS8_NAMED_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg/hm/tt7mEMfTHi6v
+p2K1b7CHPJkFcrVXKOfpogOjSOGhRANCAARVzg9ev7PrWz390hqzjj5LQ3NreCbV
+Rb9q912n311SwSLclXQfhiTXJ+pUn870o+9Dr24wBjS3cDmXH8a845l+
+-----END PRIVATE KEY-----";
+
+    const PKCS8_EXPLICIT_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIIBeQIBADCCAQMGByqGSM49AgEwgfcCAQEwLAYHKoZIzj0BAQIhAP////8AAAAB
+AAAAAAAAAAAAAAAA////////////////MFsEIP////8AAAABAAAAAAAAAAAAAAAA
+///////////////8BCBaxjXYqjqT57PrvVV2mIa8ZR0GsMxTsPY7zjw+J9JgSwMV
+AMSdNgiG5wSTamZ44ROdJreBn36QBEEEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg
+9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9QIhAP////8A
+AAAA//////////+85vqtpxeehPO5ysL8YyVRAgEBBG0wawIBAQQg/hm/tt7mEMfT
+Hi6vp2K1b7CHPJkFcrVXKOfpogOjSOGhRANCAARVzg9ev7PrWz390hqzjj5LQ3Nr
+eCbVRb9q912n311SwSLclXQfhiTXJ+pUn870o+9Dr24wBjS3cDmXH8a845l+
+-----END PRIVATE KEY-----";
+
+    const PKCS8_P384_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIG2AgEAMBAGByqGSM49AgEGBSuBBAAiBIGeMIGbAgEBBDCUx+yT22yGHP9q+Y1y
+UedDkevSvPaUuSPH8Q4FJBdYKKLqX4a5VdBIOonKPC4Yj7yhZANiAAQPRBsMOJy/
+B4yDfR2rGOd2H6Kv3fQNHPj9Nu5Tks8QYMLzrX8ONCNoFnNUQl9S0r0QS6phVqD0
+1kt0wbEvKr7mPM/R8XS8dX0xYC58CXHqBsTM0piQN2R7kqWDJ5i4OjE=
+-----END PRIVATE KEY-----";
+
+    #[test]
+    fn accepts_equivalent_p256_encodings() {
+        let named = VapidKey::from_pkcs8_pem(PKCS8_NAMED_PEM).unwrap();
+        let sec1 = VapidKey::from_pkcs8_pem(SEC1_PEM).unwrap();
+        let explicit = VapidKey::from_pkcs8_pem(PKCS8_EXPLICIT_PEM).unwrap();
+
+        assert_eq!(named.public_key(), sec1.public_key());
+        assert_eq!(named.public_key(), explicit.public_key());
+    }
+
+    #[test]
+    fn accepts_pem_with_leading_bom_and_whitespace() {
+        let dirty = format!("\u{feff}  \n{PKCS8_NAMED_PEM}\n  ");
+        assert_eq!(
+            VapidKey::from_pkcs8_pem(&dirty).unwrap().public_key(),
+            VapidKey::from_pkcs8_pem(PKCS8_NAMED_PEM)
+                .unwrap()
+                .public_key()
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_curve_key() {
+        assert!(VapidKey::from_pkcs8_pem(PKCS8_P384_PEM).is_err());
+    }
+
+    #[test]
+    fn rejects_garbage_with_actionable_error() {
+        let err = VapidKey::from_pkcs8_pem("not a key").err().unwrap();
+        assert!(err.contains("openssl pkey"), "{err}");
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org/).
 
-## [0.16.15] - 2026-07-XX
+## [0.16.15] - 2026-07-26
 
 If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
 
@@ -11,7 +11,23 @@ If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If
 ## Changed
 
 ## Fixed
+- JMAP:
+  - `Email/copy` should return `alreadyExists` when copying a message to a mailbox that already contains it.
+  - `Email/copy` with `onSuccessDestroyOriginal` destroys the copy's creation id instead of the source Email id.
+  - `CalendarEvent/set` does not generate a `uid` on create when the client omits it.
+  - `CalendarEvent/set` does not refresh the `updated` property (iCalendar `DTSTAMP`) on create or update.
+  - `EmailSubmission/set` rejects valid recipients whose domain is itself a public suffix (e.g. `gov.in`, `co.uk`).
+  - Requests are rejected with `notRequest` when a method name contains a JSON-escaped solidus (e.g. `Core\/echo`).
+- MTA: Panic when MTA-STS is disabled and a remote MTA fetched `/.well-known/mta-sts.txt`.
 - Auth: Scoped credentials with `SysApiKeyCreate` or `SysApiKeyUpdate` permissions can regain its own account's full rights.
+- Web Push: Valid VAPID keys are rejected when PEM-encoded with explicit EC parameters, in SEC1 (`EC PRIVATE KEY`) format, or with a leading byte-order mark.
+- Encryption at rest: Appended messages are encrypted for accounts that did not opt in to `encryptOnAppend`.
+- Cache: Account caches silently discard entries larger than a single `quick-cache` shard, causing constant database rebuilds.
+- Registry: Id references (e.g. `#certificate-...`) fail to resolve on `defaultCertificateId`, `defaultAdminRoleIds`, `listenerIds` and `publicKey`.
+- Search: `reindex` drops calendar and contact index tasks for accounts with fewer than a full batch of items.
+- Migration: Abort `--import` when the target already contains data in the key range being imported.
+- Cluster: Broadcast subscriber re-subscribes after every message, losing bursts of cluster broadcasts during the reconnect window.
+- Enterprise: Per-tenant logo is not shown on the OAuth login password and OTP screens, which are served from the server's canonical host rather than the tenant domain.
 
 ## [0.16.14] - 2026-07-20
 

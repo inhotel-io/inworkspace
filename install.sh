@@ -424,7 +424,7 @@ EOF
 
 create_service_macos() {
     local _bin="$1" _config="$2" _env="$3" _user="$4"
-    local _plist="/Library/LaunchDaemons/stalwart.mail.plist"
+    local _plist="/Library/LaunchDaemons/stalwart.plist"
 
     # Remove any legacy LaunchDaemons from a prior install
     if [ -f "$_plist" ]; then

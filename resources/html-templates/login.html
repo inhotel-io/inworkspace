@@ -376,8 +376,17 @@
             }
 
             (function loadCustomLogo() {
+                // The OAuth page is served from the server's canonical host, so pass the tenant
+                // domain (derived from login_hint) explicitly instead of relying on the Host header.
+                var target = '/logo';
+                if (loginHint) {
+                    var at = loginHint.lastIndexOf('@');
+                    if (at !== -1 && at < loginHint.length - 1) {
+                        target = '/logo?domain=' + encodeURIComponent(loginHint.slice(at + 1).toLowerCase());
+                    }
+                }
                 // Try to replace the embedded SVG with /logo if the server serves an image.
-                fetch('/logo', { method: 'GET', credentials: 'same-origin', cache: 'no-cache' })
+                fetch(target, { method: 'GET', credentials: 'same-origin', cache: 'no-cache' })
                     .then(function (res) {
                         if (!res.ok) return null;
                         var ct = (res.headers.get('content-type') || '').toLowerCase();

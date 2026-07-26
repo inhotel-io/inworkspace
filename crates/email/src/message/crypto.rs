@@ -12,8 +12,8 @@ use aes_gcm::{
 use chacha20poly1305::ChaCha20Poly1305;
 use common::auth::{
     ACCOUNT_FLAG_ENCRYPT_ALGO_AES256, ACCOUNT_FLAG_ENCRYPT_ALGO_AES256_GCM,
-    ACCOUNT_FLAG_ENCRYPT_ALGO_CHACHA20_POLY1305, ACCOUNT_FLAG_ENCRYPT_METHOD_PGP,
-    ACCOUNT_FLAG_ENCRYPT_TRAIN_SPAM_FILTER, EncryptionKeys,
+    ACCOUNT_FLAG_ENCRYPT_ALGO_CHACHA20_POLY1305, ACCOUNT_FLAG_ENCRYPT_APPEND,
+    ACCOUNT_FLAG_ENCRYPT_METHOD_PGP, ACCOUNT_FLAG_ENCRYPT_TRAIN_SPAM_FILTER, EncryptionKeys,
 };
 use mail_builder::{encoders::base64::base64_encode_mime, mime::make_boundary};
 use mail_parser::{Message, MimeHeaders, PartType};
@@ -397,6 +397,7 @@ impl EncryptMessage for Message<'_> {
 pub trait EncryptionFlags {
     fn cipher(&self) -> SymmetricCipher;
     fn can_train_spam_filter(&self) -> bool;
+    fn encrypt_on_append(&self) -> bool;
     fn algo(&self) -> SymmetricAlgorithm;
 }
 
@@ -415,6 +416,10 @@ impl EncryptionFlags for u64 {
 
     fn can_train_spam_filter(&self) -> bool {
         *self & ACCOUNT_FLAG_ENCRYPT_TRAIN_SPAM_FILTER != 0
+    }
+
+    fn encrypt_on_append(&self) -> bool {
+        *self & ACCOUNT_FLAG_ENCRYPT_APPEND != 0
     }
 
     fn algo(&self) -> SymmetricAlgorithm {

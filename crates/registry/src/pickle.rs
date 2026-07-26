@@ -273,4 +273,3 @@ impl Pickle for trc::Key {
         u16::unpickle(stream).and_then(Self::from_id)
     }
 }
-
