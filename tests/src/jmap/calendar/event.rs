@@ -230,30 +230,33 @@ pub async fn test(test: &TestServer) {
             "0"
         ]]))
         .await;
-    assert_eq_ignoring_updated(response.list_array(), json!([
-      {
-        "title": "Event #2",
-        "recurrenceOverrides": {
-          "2006-01-06T12:00:00": {
-            "updated": "2006-02-06T00:11:21Z",
-            "start": "2006-01-06T14:00:00",
-            "title": "Event #2 bis bis",
-            "duration": "PT1H"
+    assert_eq_ignoring_updated(
+        response.list_array(),
+        json!([
+          {
+            "title": "Event #2",
+            "recurrenceOverrides": {
+              "2006-01-06T12:00:00": {
+                "updated": "2006-02-06T00:11:21Z",
+                "start": "2006-01-06T14:00:00",
+                "title": "Event #2 bis bis",
+                "duration": "PT1H"
+              }
+            },
+            "id": "c"
+          },
+          {
+            "title": "Event #3",
+            "participants": {
+              "3f5bc8c0-c722-5345-b7d9-5a899db08a30": {
+                "calendarAddress": "mailto:cyrus@example.com",
+                "@type": "Participant"
+              }
+            },
+            "id": "d"
           }
-        },
-        "id": "c"
-      },
-      {
-        "title": "Event #3",
-        "participants": {
-          "3f5bc8c0-c722-5345-b7d9-5a899db08a30": {
-            "calendarAddress": "mailto:cyrus@example.com",
-            "@type": "Participant"
-          }
-        },
-        "id": "d"
-      }
-    ]));
+        ]),
+    );
 
     // Creating an event without calendar should fail
     assert_eq!(
@@ -397,36 +400,39 @@ pub async fn test(test: &TestServer) {
       }
     }));
 
-    assert_eq_ignoring_updated(&response.list()[1], json!({
-        "id": &event_2_id,
-        "calendarIds": {
-          &calendar1_id: true,
-          &calendar2_id: true
-        },
-        "title": "Event two",
-        "start": "2006-01-02T12:00:00",
-        "description": "Updated description",
-        "recurrenceOverrides": {
-            "2006-01-04T12:00:00": {
-                "title": "Event two overridden",
-                "start": "2006-01-04T14:00:00",
-                "duration": "PT1H",
-                "updated": "2006-02-06T00:11:21Z"
+    assert_eq_ignoring_updated(
+        &response.list()[1],
+        json!({
+            "id": &event_2_id,
+            "calendarIds": {
+              &calendar1_id: true,
+              &calendar2_id: true
             },
-            "2006-01-06T12:00:00": {
-                "title": "Event two overridden twice",
-                "start": "2006-01-06T14:00:00",
-                "duration": "PT1H",
-                "updated": "2006-02-06T00:11:21Z"
-            }
-        },
-        "title": "Event two",
-        "start": "2006-01-02T12:00:00",
-        "mayInviteOthers": false,
-        "mayInviteSelf": false,
-        "hideAttendees": false,
-        "isDraft": false
-    }));
+            "title": "Event two",
+            "start": "2006-01-02T12:00:00",
+            "description": "Updated description",
+            "recurrenceOverrides": {
+                "2006-01-04T12:00:00": {
+                    "title": "Event two overridden",
+                    "start": "2006-01-04T14:00:00",
+                    "duration": "PT1H",
+                    "updated": "2006-02-06T00:11:21Z"
+                },
+                "2006-01-06T12:00:00": {
+                    "title": "Event two overridden twice",
+                    "start": "2006-01-06T14:00:00",
+                    "duration": "PT1H",
+                    "updated": "2006-02-06T00:11:21Z"
+                }
+            },
+            "title": "Event two",
+            "start": "2006-01-02T12:00:00",
+            "mayInviteOthers": false,
+            "mayInviteSelf": false,
+            "hideAttendees": false,
+            "isDraft": false
+        }),
+    );
 
     response.list()[2].assert_is_equal(json!({
         "id": event_3_id,

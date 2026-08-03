@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
 
-use super::headers::{BuildHeader, ValueToHeader};
 use crate::{
     blob::download::BlobDownload,
     changes::state::JmapCacheState,
@@ -13,6 +12,7 @@ use crate::{
 use common::{
     Server, auth::AccessToken, ipc::PushNotification, storage::index::ObjectIndexBuilder,
 };
+use email::message::headers::{BuildHeader, ValueToHeader};
 use email::{
     cache::{MessageCacheFetch, email::MessageCacheAccess, mailbox::MailboxCacheAccess},
     mailbox::{JUNK_ID, TRASH_ID, UidMailbox},

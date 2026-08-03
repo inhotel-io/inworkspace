@@ -11,7 +11,7 @@ use common::{
     auth::BuildAccessToken,
     ipc::{PushEvent, PushNotification},
 };
-use email::push::{PushSubscription, PushSubscriptions};
+use email::push::{PushSubscription, PushSubscriptions, Urgency};
 use std::{
     collections::hash_map::Entry,
     sync::Arc,
@@ -220,7 +220,7 @@ pub fn spawn_push_manager(inner: Arc<Inner>) -> mpsc::Sender<Event> {
                                 })
                                 .unwrap_or(true)
                             {
-                                let vapid = server.core.jmap.vapid.clone();
+                                let core = server.core.clone();
                                 tokio::spawn(async move {
                                     http_request(
                                         &subscription,
@@ -235,7 +235,8 @@ pub fn spawn_push_manager(inner: Arc<Inner>) -> mpsc::Sender<Event> {
                                         )
                                         .into_bytes(),
                                         push_timeout,
-                                        vapid.as_deref(),
+                                        core.jmap.vapid.as_ref(),
+                                        Urgency::Normal,
                                     )
                                     .await;
                                 });
@@ -320,22 +321,17 @@ pub fn spawn_push_manager(inner: Arc<Inner>) -> mpsc::Sender<Event> {
                                         if let Some(mut notification) =
                                             notification.filter_types(&subscription.server.types)
                                         {
-                                            // Build email push notification
                                             if let PushNotification::EmailPush(email_push) =
                                                 &notification
-                                            {
-                                                if let Some(_email_push) = subscription
+                                                && !subscription
                                                     .server
                                                     .email_push
                                                     .iter()
-                                                    .find(|ep| ep.account_id == account_id)
-                                                {
-                                                    // TODO: Apply filters once RFC is finalized
-                                                } else {
-                                                    notification = PushNotification::StateChange(
-                                                        email_push.to_state_change(),
-                                                    );
-                                                }
+                                                    .any(|ep| ep.account_id == account_id)
+                                            {
+                                                notification = PushNotification::StateChange(
+                                                    email_push.to_state_change(),
+                                                );
                                             }
 
                                             subscription.notifications.push(notification);
@@ -352,7 +348,7 @@ pub fn spawn_push_manager(inner: Arc<Inner>) -> mpsc::Sender<Event> {
                                                     *id,
                                                     push_tx.clone(),
                                                     push_timeout,
-                                                    server.core.jmap.vapid.clone(),
+                                                    server.clone(),
                                                 );
                                                 retry_ids.remove(id);
                                             } else {
@@ -443,7 +439,7 @@ pub fn spawn_push_manager(inner: Arc<Inner>) -> mpsc::Sender<Event> {
                                         *retry_id,
                                         push_tx.clone(),
                                         push_timeout,
-                                        server.core.jmap.vapid.clone(),
+                                        server.clone(),
                                     );
                                 } else {
                                     trc::event!(

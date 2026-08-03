@@ -771,6 +771,7 @@ pub enum Property {
     MaxOutMessages = 704,
     MaxParticipantIdentities = 162,
     MaxPublicKeys = 366,
+    MaxPushSize = 923,
     MaxReceivedHeaders = 561,
     MaxRecipients = 173,
     MaxReconnects = 580,

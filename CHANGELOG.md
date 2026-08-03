@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.16.16] - 2026-08-02
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+- JMAP Email Delivery Push Notifications ([draft-ietf-jmap-emailpush-03](https://datatracker.ietf.org/doc/draft-ietf-jmap-emailpush/))
+- MTA: Allow System Sieve scripts to access `orcpt` during the `DATA` stage.
+
+## Changed
+- S3: `accessKey` can now be read from an environment variable or file.
+
+## Fixed
+- Meilisearch: Verify index existence using `GET` instead of creating a new task which times out on busy servers.
+- Branding: Stalwart logo flashes before the per-tenant logo is loaded on the login page.
+- Calendar: iMIP and alarm notification messages embed the default logo using bare `LF` line endings, producing a single 4247 octet line that strict SMTP relays reject with `line too long`.
+- DMARC: Failure reports state `Identity-Alignment: none` when a mechanism authenticated successfully but against an identity that is not aligned with the `From` domain.
+- Redis: Task and queue locks are never released after a worker dies, because failed lock attempts refresh the lock expiry.
+- Recovery mode: Download WebUI if missing.
+- Logging: The systemd journal tracer omits the parent span's fields.
+- MTA: 
+  - `BDAT` chunks sent without a valid `MAIL FROM` are answered with `552 5.3.4 Message too big for system` instead of `503 5.5.1`.
+  - A `maxMessageSize` of `0` rejects every message with `552 5.3.4 Message too big for system` instead of disabling the size limit.
+- Windows: Listeners bound to the unspecified IPv6 address (`[::]`), including all defaults, refuse IPv4 connections such as `127.0.0.1`, since `IPV6_V6ONLY` is enabled by default on Windows.
+
 ## [0.16.15] - 2026-07-26
 
 If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.

@@ -106,7 +106,9 @@ impl AccountCapabilities for AccessToken {
             .iter()
             .filter(move |capability| {
                 let permission = match capability {
-                    Capability::Mail | Capability::MailShare => Permission::JmapEmailGet,
+                    Capability::Mail | Capability::MailShare | Capability::EmailPush => {
+                        Permission::JmapEmailGet
+                    }
                     Capability::Submission => Permission::JmapEmailSubmissionCreate,
                     Capability::VacationResponse => Permission::JmapVacationResponseGet,
                     Capability::Contacts => Permission::JmapContactCardGet,

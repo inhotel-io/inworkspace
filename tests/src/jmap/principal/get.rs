@@ -47,6 +47,7 @@ pub async fn test(test: &TestServer) {
         "urn:ietf:params:jmap:calendars:parse": {},
         "urn:ietf:params:jmap:contacts": {},
         "urn:ietf:params:jmap:contacts:parse": {},
+        "urn:ietf:params:jmap:emailpush": {},
         "urn:ietf:params:jmap:filenode": {},
         "urn:ietf:params:jmap:principals": {},
         "urn:ietf:params:jmap:principals:availability": {},
@@ -108,6 +109,7 @@ pub async fn test(test: &TestServer) {
               "mayCreateAddressBook": true
             },
             "urn:ietf:params:jmap:contacts:parse": {},
+            "urn:ietf:params:jmap:emailpush": {},
             "urn:ietf:params:jmap:calendars": {
               "maxCalendarsPerEvent": null,
               "minDateTime": "0001-01-01T00:00:00Z",
@@ -252,6 +254,7 @@ pub async fn test(test: &TestServer) {
         "urn:ietf:params:jmap:vacationresponse": john_id,
         "urn:ietf:params:jmap:contacts": john_id,
         "urn:ietf:params:jmap:contacts:parse": john_id,
+        "urn:ietf:params:jmap:emailpush": john_id,
         "urn:ietf:params:jmap:calendars": john_id,
         "urn:ietf:params:jmap:calendars:parse": john_id,
         "urn:ietf:params:jmap:websocket": john_id,

@@ -93,6 +93,8 @@ pub enum Capability {
     Stalwart = 1 << 17,
     #[serde(rename(serialize = "urn:ietf:params:jmap:webpush-vapid"))]
     WebPushVapid = 1 << 18,
+    #[serde(rename(serialize = "urn:ietf:params:jmap:emailpush"))]
+    EmailPush = 1 << 19,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -331,6 +333,7 @@ impl Capability {
             Capability::MailShare => "urn:ietf:params:jmap:mail:share",
             Capability::Stalwart => "urn:stalwart:jmap",
             Capability::WebPushVapid => "urn:ietf:params:jmap:webpush-vapid",
+            Capability::EmailPush => "urn:ietf:params:jmap:emailpush",
         }
     }
 
@@ -354,6 +357,7 @@ impl Capability {
             Capability::MailShare,
             Capability::Stalwart,
             Capability::WebPushVapid,
+            Capability::EmailPush,
         ]
     }
 }
@@ -475,6 +479,7 @@ impl Capability {
             "urn:ietf:params:jmap:mail:share" => Capability::MailShare,
             "urn:stalwart:jmap" => Capability::Stalwart,
             "urn:ietf:params:jmap:webpush-vapid" => Capability::WebPushVapid,
+            "urn:ietf:params:jmap:emailpush" => Capability::EmailPush,
         )
     }
 }

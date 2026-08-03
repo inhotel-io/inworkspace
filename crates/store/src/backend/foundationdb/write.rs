@@ -21,7 +21,7 @@ use foundationdb::{
     options::{self, MutationType},
 };
 use futures::TryStreamExt;
-use rand::Rng;
+use rand::RngExt;
 use std::{
     cmp::Ordering,
     time::{Duration, Instant},

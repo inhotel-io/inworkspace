@@ -924,6 +924,7 @@ impl EnumImpl for Property {
             b"maxOutMessages" => Property::MaxOutMessages,
             b"maxParticipantIdentities" => Property::MaxParticipantIdentities,
             b"maxPublicKeys" => Property::MaxPublicKeys,
+            b"maxPushSize" => Property::MaxPushSize,
             b"maxReceivedHeaders" => Property::MaxReceivedHeaders,
             b"maxRecipients" => Property::MaxRecipients,
             b"maxReconnects" => Property::MaxReconnects,
@@ -1852,6 +1853,7 @@ impl EnumImpl for Property {
             Property::MaxOutMessages => "maxOutMessages",
             Property::MaxParticipantIdentities => "maxParticipantIdentities",
             Property::MaxPublicKeys => "maxPublicKeys",
+            Property::MaxPushSize => "maxPushSize",
             Property::MaxReceivedHeaders => "maxReceivedHeaders",
             Property::MaxRecipients => "maxRecipients",
             Property::MaxReconnects => "maxReconnects",
@@ -2784,6 +2786,7 @@ impl EnumImpl for Property {
             704 => Some(Property::MaxOutMessages),
             162 => Some(Property::MaxParticipantIdentities),
             366 => Some(Property::MaxPublicKeys),
+            923 => Some(Property::MaxPushSize),
             561 => Some(Property::MaxReceivedHeaders),
             173 => Some(Property::MaxRecipients),
             580 => Some(Property::MaxReconnects),
@@ -3194,7 +3197,7 @@ impl EnumImpl for Property {
         }
     }
 
-    const COUNT: usize = 923;
+    const COUNT: usize = 924;
 }
 
 impl serde::Serialize for Property {

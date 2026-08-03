@@ -7,7 +7,7 @@
 use crate::network::webpush::{Vapid, VapidKey};
 use jmap_proto::request::capability::BaseCapabilities;
 use registry::schema::{prelude::ObjectType, structs::Jmap};
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use store::registry::bootstrap::Bootstrap;
 
 #[derive(Default, Clone)]
@@ -42,12 +42,13 @@ pub struct JmapConfig {
     pub push_verify_timeout: Duration,
     pub push_throttle: Duration,
     pub push_total_shards: u32,
+    pub push_max_size: usize,
 
     pub web_socket_throttle: Duration,
     pub web_socket_timeout: Duration,
     pub web_socket_heartbeat: Duration,
 
-    pub vapid: Option<Arc<Vapid>>,
+    pub vapid: Option<Vapid>,
 
     pub capabilities: BaseCapabilities,
 }
@@ -97,6 +98,7 @@ impl JmapConfig {
             push_verify_timeout: jmap.push_verify_timeout.into_inner(),
             push_throttle: jmap.push_throttle.into_inner(),
             push_total_shards: jmap.push_shards_total as u32,
+            push_max_size: jmap.max_push_size as usize,
             vapid: None,
             capabilities: BaseCapabilities::default(),
         };
@@ -121,7 +123,7 @@ impl JmapConfig {
                     let hostname = bp.registry.local_hostname();
                     (!hostname.is_empty()).then(|| format!("mailto:postmaster@{hostname}"))
                 });
-                Arc::new(Vapid::new(key, contact))
+                Vapid::new(key, contact)
             });
 
         // Add capabilities

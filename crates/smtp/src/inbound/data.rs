@@ -974,39 +974,41 @@ impl<T: SessionStream> Session<T> {
         }
     }
 
-    pub async fn can_send_data(&mut self) -> Result<bool, ()> {
-        if !self.data.rcpt_to.is_empty() {
-            if self.data.messages_sent
-                < self
-                    .server
-                    .eval_if(
-                        &self.server.core.smtp.session.data.max_messages,
-                        self,
-                        self.data.session_id,
-                    )
-                    .await
-                    .unwrap_or(10)
-            {
-                Ok(true)
-            } else {
-                trc::event!(
-                    Smtp(SmtpEvent::TooManyMessages),
-                    SpanId = self.data.session_id,
-                    Limit = self.data.messages_sent
-                );
+    pub async fn can_send_data(&mut self) -> Option<&'static [u8]> {
+        if self.data.mail_from.is_none() {
+            trc::event!(
+                Smtp(SmtpEvent::MailFromMissing),
+                SpanId = self.data.session_id,
+            );
 
-                self.write(b"452 4.4.5 Maximum number of messages per session exceeded.\r\n")
-                    .await?;
-                Ok(false)
-            }
-        } else {
+            Some(b"503 5.5.1 MAIL is required first.\r\n")
+        } else if self.data.rcpt_to.is_empty() {
             trc::event!(
                 Smtp(SmtpEvent::RcptToMissing),
                 SpanId = self.data.session_id,
             );
 
-            self.write(b"503 5.5.1 RCPT is required first.\r\n").await?;
-            Ok(false)
+            Some(b"503 5.5.1 RCPT is required first.\r\n")
+        } else if self.data.messages_sent
+            < self
+                .server
+                .eval_if(
+                    &self.server.core.smtp.session.data.max_messages,
+                    self,
+                    self.data.session_id,
+                )
+                .await
+                .unwrap_or(10)
+        {
+            None
+        } else {
+            trc::event!(
+                Smtp(SmtpEvent::TooManyMessages),
+                SpanId = self.data.session_id,
+                Limit = self.data.messages_sent
+            );
+
+            Some(b"452 4.4.5 Maximum number of messages per session exceeded.\r\n")
         }
     }
 

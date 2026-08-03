@@ -15,7 +15,7 @@ use std::{
 use store::{
     SearchStore,
     ahash::AHashMap,
-    rand::{self, Rng, distr::Alphanumeric},
+    rand::{self, RngExt, distr::Alphanumeric},
     roaring::RoaringBitmap,
     search::{
         EmailSearchField, IndexDocument, SearchComparator, SearchField, SearchFilter,

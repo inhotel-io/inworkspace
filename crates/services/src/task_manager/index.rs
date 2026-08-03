@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 use store::{
     IterateParams, ValueKey,
     ahash::AHashMap,
-    rand::{self, Rng},
+    rand::{self, RngExt},
     search::{IndexDocument, SearchField, SearchFilter, SearchQuery},
     write::{
         AlignedBytes, Archive, BatchBuilder, SearchIndex, TelemetryClass, ValueClass,

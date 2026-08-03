@@ -296,6 +296,16 @@ impl JmapConfig {
             Capabilities::Empty(EmptyCapabilities::default()),
         );
 
+        // Add Email Delivery Push capabilities
+        self.capabilities.session.append(
+            Capability::EmailPush,
+            Capabilities::Empty(EmptyCapabilities::default()),
+        );
+        self.capabilities.account.insert(
+            Capability::EmailPush,
+            Capabilities::Empty(EmptyCapabilities::default()),
+        );
+
         // Add Web Push VAPID capabilities
         if let Some(application_server_key) = self
             .vapid

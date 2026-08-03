@@ -19,7 +19,7 @@ use registry::{
 };
 use std::str::FromStr;
 use store::{
-    rand::{Rng, distr::Alphanumeric, rng},
+    rand::{RngExt, distr::Alphanumeric, rng},
     registry::{
         bootstrap::Bootstrap,
         write::{RegistryWrite, RegistryWriteResult},
@@ -51,9 +51,7 @@ async fn insert_safe_defaults(bp: &mut Bootstrap) -> trc::Result<()> {
     let is_bootstrap_mode = bp.registry.is_bootstrap_mode();
 
     #[cfg(not(feature = "test_mode"))]
-    if (!is_recovery_mode || is_bootstrap_mode)
-        && bp.registry.count_object(ObjectType::Application).await? == 0
-    {
+    if bp.registry.count_object(ObjectType::Application).await? == 0 {
         bp.registry
             .write(RegistryWrite::insert(
                 &Application {
