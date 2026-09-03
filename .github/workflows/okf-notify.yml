@@ -2,9 +2,8 @@
 #
 # okf is the aggregate bundle: it projects the OKF markers, schemas and documentation of
 # every enrolled repository into one tree that external contributors can read, and never
-# projects source code. It used to poll every fifteen minutes to notice a change. This
-# notifier replaces the poll, so the bundle refreshes in seconds instead of up to a
-# quarter of an hour, and costs a fraction of the Actions minutes.
+# projects source code. This notifier is how okf finds out that something changed: there is
+# no schedule on the okf side, so without this file the bundle would never refresh.
 #
 # This file is GENERATED and identical in every enrolled repository. Change it in
 # inhotel-io/okf (tools/okf-aggregate/templates/okf-notify.yml) and re-run the installer,
