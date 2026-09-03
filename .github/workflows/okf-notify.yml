@@ -1,0 +1,91 @@
+# Tell inhotel-io/okf that this repository's knowledge surface moved.
+#
+# okf is the aggregate bundle: it projects the OKF markers, schemas and documentation of
+# every enrolled repository into one tree that external contributors can read, and never
+# projects source code. It used to poll every fifteen minutes to notice a change. This
+# notifier replaces the poll, so the bundle refreshes in seconds instead of up to a
+# quarter of an hour, and costs a fraction of the Actions minutes.
+#
+# This file is GENERATED and identical in every enrolled repository. Change it in
+# inhotel-io/okf (tools/okf-aggregate/templates/okf-notify.yml) and re-run the installer,
+# not here.
+#
+# WHAT IT SENDS: the name of this repository, and nothing else. It is advisory. okf always
+# re-projects every enrolled repository, because cross-repo links resolve against a global
+# index and a partial sync would emit a bundle that is not a projection of anything. This
+# workflow cannot influence WHAT okf publishes -- only when it looks.
+#
+# WHAT IT COSTS: nothing until it is configured. The job-level `if:` below is evaluated
+# before a runner is allocated, so with no app id set this workflow bills zero minutes.
+# Once configured, one job of a few seconds per qualifying push, rounded to one minute.
+name: okf-notify
+
+on:
+  push:
+    branches: [main]
+    # Only the knowledge surface. A push that touches nothing but code must not wake okf:
+    # it would cost a full projection to discover that nothing publishable changed.
+    paths:
+      - "**.md"
+      - "**.markdown"
+      - "**/okf.md"
+      - "**/model.yaml"
+      - "**/schema.json"
+      - "catalog/**"
+      - "docs/**"
+  workflow_dispatch:
+
+# Nothing in this repository is read or written. The only credential used is the app token
+# minted below, which is scoped to inhotel-io/okf.
+permissions: {}
+
+concurrency:
+  # One notification in flight per branch; a burst of pushes collapses into the latest.
+  # Cancelling is safe: okf re-projects everything, so a superseded notification carries no
+  # information the next one lacks.
+  group: okf-notify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  notify:
+    # Zero-cost until configured, and it must stay a JOB-level condition. A job that starts
+    # and then skips its steps still occupies a runner and is rounded up to a whole
+    # billable minute; a job whose `if:` is false never gets a runner at all.
+    #
+    # `vars` is available in a job-level `if:`; `secrets` is not. The app id alone is enough
+    # to tell configured from unconfigured, and the token step fails loudly if the key is
+    # missing once the id is set.
+    if: vars.OKF_DISPATCH_APP_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # `actions: write` on inhotel-io/okf and nothing else -- enough to start a workflow,
+      # not enough to push a commit. POST /repos/{o}/{r}/dispatches would have needed
+      # `contents: write`, which on a private repo with no branch protection would be a
+      # path straight to okf's main from every enrolled repository.
+      - name: Mint a token scoped to okf
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.OKF_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.OKF_DISPATCH_PRIVATE_KEY }}
+          owner: inhotel-io
+          repositories: okf
+
+      - name: Ask okf to re-project
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          # Passed through env, never interpolated into the shell: a ${{ }} expansion
+          # inside a run: block is a command substitution waiting to happen, and a
+          # repository name is attacker-chosen on a fork.
+          SOURCE_REPO: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          # force=false so okf resolves the enrolled remotes and exits in about a second if
+          # nothing actually moved. A notification is a hint, not an instruction.
+          gh api "repos/inhotel-io/okf/actions/workflows/sync.yml/dispatches" \
+            --method POST \
+            --field ref=main \
+            --field "inputs[only]=${SOURCE_REPO}" \
+            --field "inputs[force]=false"
+          echo "::notice title=okf notified::asked inhotel-io/okf to re-project after a push to ${SOURCE_REPO}"
