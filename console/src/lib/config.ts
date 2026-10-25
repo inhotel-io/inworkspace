@@ -1,5 +1,5 @@
 export type ConsoleRole = "web" | "ingest" | "all";
-export type AuthMode = "iap" | "none";
+export type AuthMode = "iap" | "cloud-run" | "none";
 
 export interface ConsoleConfig {
   role: ConsoleRole;
@@ -112,15 +112,17 @@ export function parseConfig(env: Env): ConsoleConfig {
     }
 
     const mode = text(env, "AUTH_MODE") || "iap";
-    if (mode !== "iap" && mode !== "none") problems.push("AUTH_MODE must be iap or none");
-    authMode = mode === "none" ? "none" : "iap";
+    if (mode !== "iap" && mode !== "cloud-run" && mode !== "none") problems.push("AUTH_MODE must be iap, cloud-run or none");
+    authMode = mode === "none" || mode === "cloud-run" ? mode : "iap";
     if (mode === "iap") {
       iapAudience = need("IAP_AUDIENCE");
       iapJwksUrl = text(env, "IAP_JWKS_URL") || GOOGLE_IAP_JWKS_URL;
+    }
+    if (mode === "iap" || mode === "cloud-run") {
       allowedEmails = list(env, "ALLOWED_EMAILS");
       allowedDomains = list(env, "ALLOWED_DOMAINS");
       if (allowedEmails.length === 0 && allowedDomains.length === 0) {
-        problems.push("ALLOWED_EMAILS or ALLOWED_DOMAINS is required when AUTH_MODE=iap");
+        problems.push(`ALLOWED_EMAILS or ALLOWED_DOMAINS is required when AUTH_MODE=${mode}`);
       }
     } else if (mode === "none" && env.NODE_ENV === "production" && env.ALLOW_INSECURE_AUTH_NONE !== "1") {
       problems.push("AUTH_MODE=none is refused in production unless ALLOW_INSECURE_AUTH_NONE=1");

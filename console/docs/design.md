@@ -257,11 +257,22 @@ seconds and prepends new rows. Each row expands to its full JSON.
 
 ## Access control and privacy
 
-- Every request to the web role passes a gate (`proxy.ts`) that trusts only the identity in
-  the proxy's signed assertion. With `AUTH_MODE=iap` it verifies the
-  `x-goog-iap-jwt-assertion` JWT against Google's public keys and the configured audience,
-  then checks the email against `ALLOWED_EMAILS` and `ALLOWED_DOMAINS`, and answers 403
-  otherwise. Every page and API route repeats the check before it reads data.
+- Every request to the web role passes a gate (`proxy.ts`) that trusts only the identity
+  the platform verified, then checks the email against `ALLOWED_EMAILS` and
+  `ALLOWED_DOMAINS`, and answers 403 otherwise. Every page and API route repeats the check
+  before it reads data.
+  - With `AUTH_MODE=iap` the gate verifies the `x-goog-iap-jwt-assertion` JWT against
+    Google's public keys and the configured audience.
+  - With `AUTH_MODE=cloud-run` the service is private, and Cloud Run's IAM check verifies the
+    caller's Google ID token. Cloud Run forwards the token with its signature replaced by
+    `SIGNATURE_REMOVED_BY_GOOGLE`, so the gate reads the email only from such tokens. It also
+    requires a Google issuer, an unexpired token and a verified email.
+  - Because `cloud-run` mode trusts Cloud Run's check, the web role reads its own service and
+    IAM policy at startup and every five minutes. It refuses to start, or exits, when
+    `allUsers` or `allAuthenticatedUsers` may invoke it, or when the invoker check is
+    disabled. This mode exists because IAP's Google-managed OAuth client needs the project
+    to be in an organization. Operators reach the service with
+    `gcloud run services proxy`.
 - `AUTH_MODE=none` is for local development. It is refused when `NODE_ENV=production`
   unless `ALLOW_INSECURE_AUTH_NONE=1` is also set, which only local end-to-end runs do.
 - Every conversation and thread view writes an audit line: operator, agent, thread id,
@@ -285,7 +296,7 @@ seconds and prepends new rows. Each row expands to its full JSON.
 | `JMAP_PRINCIPAL_SECRET` | web | Its password. |
 | `AGENT_DOMAINS` | web | Comma-separated domains whose accounts are agent mailboxes. |
 | `AGENT_LOCALPART_PATTERN` | web | Optional regular expression the whole local part must match. |
-| `AUTH_MODE` | web | `iap` or `none`. |
+| `AUTH_MODE` | web | `iap`, `cloud-run` or `none`. |
 | `IAP_AUDIENCE` | web | Expected audience of the proxy assertion. |
 | `IAP_JWKS_URL` | web | Key set for the assertion; defaults to Google's IAP keys. |
 | `ALLOWED_EMAILS`, `ALLOWED_DOMAINS` | web | Who may use the console once signed in. |

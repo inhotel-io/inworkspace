@@ -100,6 +100,14 @@ describe("parseConfig", () => {
     expect(problemsOf({ ...WEB, AUTH_MODE: "none", NODE_ENV: "production", ALLOW_INSECURE_AUTH_NONE: "1" })).toEqual([]);
   });
 
+  it("accepts AUTH_MODE=cloud-run with an allow-list and no audience", () => {
+    const config = parseConfig({ ...WEB, AUTH_MODE: "cloud-run", IAP_AUDIENCE: "" });
+    expect(config.authMode).toBe("cloud-run");
+    expect(problemsOf({ ...WEB, AUTH_MODE: "cloud-run", ALLOWED_DOMAINS: "" })).toContain(
+      "ALLOWED_EMAILS or ALLOWED_DOMAINS is required when AUTH_MODE=cloud-run",
+    );
+  });
+
   it("anchors the local-part pattern", () => {
     const config = parseConfig({ ...WEB, AGENT_LOCALPART_PATTERN: "a[0-9a-z]{7}" });
     expect(config.agentLocalpartPattern?.test("a21i3v9v")).toBe(true);

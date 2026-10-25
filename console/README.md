@@ -49,7 +49,7 @@ for `EVENT_RETENTION_DAYS`.
 | `JMAP_PRINCIPAL_SECRET` | web | Its password. |
 | `AGENT_DOMAINS` | web | Comma-separated domains whose accounts are agent mailboxes. |
 | `AGENT_LOCALPART_PATTERN` | web | Optional regular expression the whole local part must match. |
-| `AUTH_MODE` | web | `iap` (default) or `none`. |
+| `AUTH_MODE` | web | `iap` (default), `cloud-run` or `none`; see [Access](#access). |
 | `IAP_AUDIENCE` | web | Expected audience of the proxy's signed assertion. |
 | `IAP_JWKS_URL` | web | Key set for the assertion; defaults to Google's IAP keys. |
 | `ALLOWED_EMAILS`, `ALLOWED_DOMAINS` | web | Who may use the console once signed in. |
@@ -110,13 +110,41 @@ The reference deployment is Google Cloud Run:
 
 - **ingest service**: `CONSOLE_ROLE=ingest`, publicly reachable so the mail server can post
   to it. Every request must carry a valid signature.
-- **web service**: `CONSOLE_ROLE=web`, with Identity-Aware Proxy enabled and access granted to
-  the people who oversee the agents. For Cloud Run, `IAP_AUDIENCE` is
-  `/projects/<project number>/locations/<region>/services/<service name>`.
+- **web service**: `CONSOLE_ROLE=web`, never publicly invokable. See [Access](#access) for
+  how operators reach it.
 - **Database**: Cloud SQL Postgres through the built-in connector:
   `DATABASE_URL=postgresql://<user>:<password>@/<database>?host=/cloudsql/<instance connection name>`.
 - **Secrets**: supply `DATABASE_URL`, `WEBHOOK_SIGNING_KEY` and `JMAP_PRINCIPAL_SECRET` from a
   secret manager, never as plain environment values in source control.
+- **Health**: Cloud Run reserves paths ending in `z`, so `/healthz` does not reach the app
+  there. Its default TCP startup probe is enough, because a bad configuration makes the
+  server exit.
+
+## Access
+
+The web role trusts the identity the platform verified, in one of two modes.
+
+- **`AUTH_MODE=iap`**: Identity-Aware Proxy in front of the service, so operators sign in
+  with Google in the browser.
+  - Grant operators `roles/iap.httpsResourceAccessor`.
+  - For IAP on Cloud Run, `IAP_AUDIENCE` is
+    `/projects/<project number>/locations/<region>/services/<service name>`.
+  - IAP's Google-managed OAuth client works only for projects in an organization. A
+    standalone project needs a custom OAuth client, created in the Cloud console.
+- **`AUTH_MODE=cloud-run`**: Cloud Run's own IAM check, with no IAP.
+  - Grant operators `roles/run.invoker` on the service.
+  - Operators open the console with
+    `gcloud run services proxy <service> --region <region>`, then browse
+    http://localhost:8080.
+  - Cloud Run verifies the caller's Google ID token and forwards it with its signature
+    replaced by `SIGNATURE_REMOVED_BY_GOOGLE`, so the console reads the caller's email from
+    it without checking the signature again.
+  - That is only safe while nobody can invoke the service without IAM. The console checks
+    this itself: give the web service's account `roles/run.viewer` on the service. It
+    refuses to start if `allUsers` or `allAuthenticatedUsers` can invoke it, or if the IAM
+    check is disabled, and it exits if that changes later. It re-checks every five minutes.
+
+Both modes then check the email against `ALLOWED_EMAILS` and `ALLOWED_DOMAINS`.
 
 Logs are JSON lines. `console.view` records every conversation and thread view, with the
 operator, agent and thread. `console.ingest.*` and `console.startup-failed` report problems.
@@ -129,9 +157,11 @@ operator, agent and thread. `console.ingest.*` and `console.startup-failed` repo
 - **The principal's password can impersonate any mailbox on the server**, not only agents.
   The console limits itself to directory agents and read-only methods, but the secret does
   not. Store it like an administrator credential and rotate it with `server-setup.mjs`.
-- The web role trusts only the identity in the proxy's signed assertion. It checks the
-  signature, issuer, audience and expiry, then the allow-list, on every request and again in
-  every page and API route.
+- The web role trusts only the identity the platform verified. It checks it, then the
+  allow-list, on every request and again in every page and API route.
+  - In `iap` mode it checks the assertion's signature, issuer, audience and expiry.
+  - In `cloud-run` mode it checks Cloud Run's marker, the issuer, expiry and a verified
+    email, and it refuses to run while the service is publicly invokable.
 - Email HTML is sanitized on the server. It is shown in an `iframe` with an empty `sandbox`
   attribute, under a content security policy that blocks every remote resource, so tracking
   pixels never load.
