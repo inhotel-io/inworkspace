@@ -1,5 +1,9 @@
 # inWorkspace Console Implementation Plan
 
+> **Superseded.** This plan built version 0.1: the server-rendered console behind Google identity.
+> Version 0.2 is served by the inWorkspace server itself; see [plan-server-hosted.md](plan-server-hosted.md)
+> and [design.md](design.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the read-only inWorkspace Console described in [`design.md`](design.md): agent conversations read live over JMAP, server events received through the signed event webhook, and a 24-hour overview.

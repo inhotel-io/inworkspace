@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeEntities, emailHtmlDocument, htmlToText, sanitizeEmailHtml } from "./sanitize";
+import { decodeEntities, htmlToText, sanitizeEmailHtml } from "./sanitize";
 
 describe("sanitizeEmailHtml", () => {
   it("removes scripts, handlers, frames and forms", () => {
@@ -37,13 +37,5 @@ describe("htmlToText", () => {
 
   it("decodes named, decimal and hex entities and leaves unknown ones", () => {
     expect(decodeEntities("&lt;a&gt; &quot;b&quot; &#39;c&#39; &#x263A; &bogus;")).toBe(`<a> "b" 'c' ☺ &bogus;`);
-  });
-});
-
-describe("emailHtmlDocument", () => {
-  it("wraps the body in a document that blocks every remote resource", () => {
-    const document = emailHtmlDocument("<p>Hi</p>");
-    expect(document).toContain(`content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:"`);
-    expect(document).toContain("<body><p>Hi</p></body>");
   });
 });

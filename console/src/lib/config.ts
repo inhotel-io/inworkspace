@@ -1,5 +1,5 @@
-export type ConsoleRole = "web" | "ingest" | "all";
-export type AuthMode = "iap" | "cloud-run" | "none";
+export type ConsoleRole = "api" | "ingest" | "all";
+export type AuthMode = "server" | "none";
 
 export interface ConsoleConfig {
   role: ConsoleRole;
@@ -7,18 +7,27 @@ export interface ConsoleConfig {
   /** Ingest role only; empty otherwise. */
   webhookSigningKey: string;
   retentionDays: number;
-  /** Web role only; empty otherwise. */
+  /** API role only; empty otherwise. */
   jmapUrl: string;
   jmapPrincipal: string;
   jmapPrincipalSecret: string;
   agentDomains: string[];
   agentLocalpartPattern: RegExp | null;
+  /** Origin at which browsers reach the api role. */
+  publicUrl: string;
   authMode: AuthMode;
-  iapAudience: string;
-  iapJwksUrl: string;
-  allowedEmails: string[];
-  allowedDomains: string[];
-  displayTimeZone: string;
+  /** The server permission an operator's account needs. */
+  operatorPermission: string;
+  /** Logins that may use the console; empty allows every account with the permission. */
+  allowedAccounts: string[];
+  oauthClientId: string;
+  /** Null shows times in each browser's own time zone. */
+  displayTimeZone: string | null;
+  uiDistDir: string;
+  /** Proxies in front of this service that append the client's address to X-Forwarded-For. */
+  trustedProxyHops: number;
+  /** Tokens that live longer cannot be access tokens (refresh tokens, links), and are refused unchecked. */
+  maxAccessTokenLifetimeSeconds: number;
 }
 
 export class ConfigError extends Error {
@@ -30,14 +39,22 @@ export class ConfigError extends Error {
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-const GOOGLE_IAP_JWKS_URL = "https://www.gstatic.com/iap/verify/public_key-jwk";
+/** The origin of an http(s) URL that is nothing more than an origin; null otherwise. */
+function originOf(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || url.protocol === "http:") && url.href === `${url.origin}/` ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
 
 export function servesIngest(config: Pick<ConsoleConfig, "role">): boolean {
   return config.role === "ingest" || config.role === "all";
 }
 
-export function servesWeb(config: Pick<ConsoleConfig, "role">): boolean {
-  return config.role === "web" || config.role === "all";
+export function servesApi(config: Pick<ConsoleConfig, "role">): boolean {
+  return config.role === "api" || config.role === "all";
 }
 
 function text(env: Env, name: string): string {
@@ -58,10 +75,24 @@ export function parseConfig(env: Env): ConsoleConfig {
     if (!value) problems.push(`${name} is required`);
     return value;
   };
+  const origin = (name: string, example: string): string => {
+    const value = need(name);
+    if (!value) return "";
+    const parsed = originOf(value);
+    if (!parsed) problems.push(`${name} must be an http(s) origin such as ${example}`);
+    return parsed ?? value;
+  };
+  const whole = (name: string, fallback: number, min: number, max: number, problem: string): number => {
+    const raw = text(env, name);
+    if (!raw) return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < min || value > max) problems.push(problem);
+    return value;
+  };
 
   const role = text(env, "CONSOLE_ROLE") as ConsoleRole;
-  if (role !== "web" && role !== "ingest" && role !== "all") {
-    problems.push("CONSOLE_ROLE must be web, ingest or all");
+  if (role !== "api" && role !== "ingest" && role !== "all") {
+    problems.push("CONSOLE_ROLE must be api, ingest or all");
   }
   const databaseUrl = need("DATABASE_URL");
 
@@ -86,17 +117,17 @@ export function parseConfig(env: Env): ConsoleConfig {
   let jmapPrincipalSecret = "";
   let agentDomains: string[] = [];
   let agentLocalpartPattern: RegExp | null = null;
-  let authMode: AuthMode = "iap";
-  let iapAudience = "";
-  let iapJwksUrl = GOOGLE_IAP_JWKS_URL;
-  let allowedEmails: string[] = [];
-  let allowedDomains: string[] = [];
-  let displayTimeZone = "UTC";
-  if (servesWeb({ role })) {
-    jmapUrl = need("JMAP_URL").replace(/\/+$/, "");
-    if (jmapUrl && !/^https?:\/\/[^/]+$/.test(jmapUrl)) {
-      problems.push("JMAP_URL must be an http(s) origin such as https://mail.example.com");
-    }
+  let publicUrl = "";
+  let authMode: AuthMode = "server";
+  let operatorPermission = "impersonate";
+  let allowedAccounts: string[] = [];
+  let oauthClientId = "inworkspace-console";
+  let displayTimeZone: string | null = null;
+  let uiDistDir = "ui-dist";
+  let trustedProxyHops = 0;
+  let maxAccessTokenLifetimeSeconds = 86400;
+  if (servesApi({ role })) {
+    jmapUrl = origin("JMAP_URL", "https://mail.example.com");
     jmapPrincipal = need("JMAP_PRINCIPAL").toLowerCase();
     jmapPrincipalSecret = need("JMAP_PRINCIPAL_SECRET");
     agentDomains = list(env, "AGENT_DOMAINS");
@@ -111,29 +142,44 @@ export function parseConfig(env: Env): ConsoleConfig {
       }
     }
 
-    const mode = text(env, "AUTH_MODE") || "iap";
-    if (mode !== "iap" && mode !== "cloud-run" && mode !== "none") problems.push("AUTH_MODE must be iap, cloud-run or none");
-    authMode = mode === "none" || mode === "cloud-run" ? mode : "iap";
-    if (mode === "iap") {
-      iapAudience = need("IAP_AUDIENCE");
-      iapJwksUrl = text(env, "IAP_JWKS_URL") || GOOGLE_IAP_JWKS_URL;
-    }
-    if (mode === "iap" || mode === "cloud-run") {
-      allowedEmails = list(env, "ALLOWED_EMAILS");
-      allowedDomains = list(env, "ALLOWED_DOMAINS");
-      if (allowedEmails.length === 0 && allowedDomains.length === 0) {
-        problems.push(`ALLOWED_EMAILS or ALLOWED_DOMAINS is required when AUTH_MODE=${mode}`);
-      }
-    } else if (mode === "none" && env.NODE_ENV === "production" && env.ALLOW_INSECURE_AUTH_NONE !== "1") {
+    publicUrl = origin("PUBLIC_URL", "https://console-api.example.com");
+
+    const mode = text(env, "AUTH_MODE") || "server";
+    if (mode !== "server" && mode !== "none") problems.push("AUTH_MODE must be server or none");
+    authMode = mode === "none" ? "none" : "server";
+    if (mode === "none" && env.NODE_ENV === "production" && env.ALLOW_INSECURE_AUTH_NONE !== "1") {
       problems.push("AUTH_MODE=none is refused in production unless ALLOW_INSECURE_AUTH_NONE=1");
     }
 
-    displayTimeZone = text(env, "DISPLAY_TIME_ZONE") || "UTC";
-    try {
-      new Intl.DateTimeFormat("en-GB", { timeZone: displayTimeZone });
-    } catch {
-      problems.push("DISPLAY_TIME_ZONE is not a valid IANA time zone");
+    operatorPermission = text(env, "OPERATOR_PERMISSION") || "impersonate";
+    if (!/^[A-Za-z][A-Za-z0-9]*$/.test(operatorPermission)) {
+      problems.push("OPERATOR_PERMISSION must be a permission name such as impersonate");
     }
+    allowedAccounts = list(env, "ALLOWED_ACCOUNTS");
+    oauthClientId = text(env, "OAUTH_CLIENT_ID") || "inworkspace-console";
+    if (!/^[A-Za-z0-9._~-]{1,100}$/.test(oauthClientId)) {
+      problems.push("OAUTH_CLIENT_ID may only contain letters, digits and . _ ~ -");
+    }
+
+    const zone = text(env, "DISPLAY_TIME_ZONE");
+    if (zone) {
+      try {
+        new Intl.DateTimeFormat("en-GB", { timeZone: zone });
+        displayTimeZone = zone;
+      } catch {
+        problems.push("DISPLAY_TIME_ZONE is not a valid IANA time zone");
+      }
+    }
+    uiDistDir = text(env, "UI_DIST_DIR") || "ui-dist";
+    trustedProxyHops = whole("TRUSTED_PROXY_HOPS", 0, 0, 10, "TRUSTED_PROXY_HOPS must be a whole number from 0 to 10");
+    maxAccessTokenLifetimeSeconds = whole(
+      "MAX_ACCESS_TOKEN_LIFETIME",
+      86400,
+      60,
+      // A week: well below the 30 days refresh tokens live by default.
+      604_800,
+      "MAX_ACCESS_TOKEN_LIFETIME must be a whole number of seconds from 60 to 604800",
+    );
   }
 
   if (problems.length > 0) throw new ConfigError(problems);
@@ -147,12 +193,15 @@ export function parseConfig(env: Env): ConsoleConfig {
     jmapPrincipalSecret,
     agentDomains,
     agentLocalpartPattern,
+    publicUrl,
     authMode,
-    iapAudience,
-    iapJwksUrl,
-    allowedEmails,
-    allowedDomains,
+    operatorPermission,
+    allowedAccounts,
+    oauthClientId,
     displayTimeZone,
+    uiDistDir,
+    trustedProxyHops,
+    maxAccessTokenLifetimeSeconds,
   };
 }
 
