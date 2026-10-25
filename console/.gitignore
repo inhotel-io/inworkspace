@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# the repository root ignores dotfiles; keep the image build context file
+!.dockerignore
