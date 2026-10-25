@@ -1,5 +1,6 @@
 node_modules
 .next
+ui-dist
 e2e
 docs
 *.md
