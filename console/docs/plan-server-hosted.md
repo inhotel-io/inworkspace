@@ -28,7 +28,7 @@ content; paths are relative to `console/`. Run every command from `console/`.
 
 | Path | Responsibility |
 | --- | --- |
-| `vite.config.ts` | Web app build (`ui/` → `ui-dist/`) and development server. |
+| `vite.config.mts` | Web app build (`ui/` → `ui-dist/`) and development server. |
 | `ui/index.html` | Page template; the API fills the settings placeholders. |
 | `ui/src/settings.ts` | Runtime settings from the page, and the base path. |
 | `ui/src/auth/pkce.ts` | Random tokens and the S256 challenge. |
@@ -61,7 +61,7 @@ Deleted:
 ### Task 1: Tooling
 
 **Files:** `package.json`, `package-lock.json`, `vitest.config.mts`, `eslint.config.mjs`,
-`tsconfig.json`, `.gitignore`, `.dockerignore`, `vite.config.ts`.
+`tsconfig.json`, `.gitignore`, `.dockerignore`, `vite.config.mts`.
 
 - [ ] **Step 1: Change dependencies and scripts**
 
@@ -106,6 +106,11 @@ const eslintConfig = defineConfig([
       // Underscore-prefixed parameters exist only to give a callback its type.
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
+  },
+  {
+    // The web app is not a Next.js app: it runs on the mail server's origin and navigates itself.
+    files: ["ui/**"],
+    rules: { "@next/next/no-location-assign-relative-destination": "off" },
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([
@@ -174,7 +179,7 @@ docs
 coverage
 ```
 
-**File: `vite.config.ts`**
+**File: `vite.config.mts`**
 
 ```ts
 import path from "node:path";
@@ -232,7 +237,7 @@ Expected: PASS (the existing suites; nothing changed in `src/` yet).
 - [ ] **Step 4: Commit**
 
 ```bash
-git add package.json package-lock.json vitest.config.mts eslint.config.mjs tsconfig.json .gitignore .dockerignore vite.config.ts
+git add package.json package-lock.json vitest.config.mts eslint.config.mjs tsconfig.json .gitignore .dockerignore vite.config.mts
 git commit -m "build(console): tooling for a web app built with Vite"
 ```
 

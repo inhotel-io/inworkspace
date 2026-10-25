@@ -1,9 +1,8 @@
-import Link from "next/link";
-import type { StoredEvent } from "@/lib/eventStore";
+import { Link } from "react-router";
+import type { StoredEvent } from "@/lib/apiTypes";
 import { describeEvent, formatDateTime } from "@/lib/format";
 import { SeverityBadge } from "./SeverityBadge";
 
-/** Has no server-only imports: the live table renders it on the client too. */
 export function EventRow({ event, timeZone }: { event: StoredEvent; timeZone: string }) {
   return (
     <tr className="border-t border-border align-top">
@@ -14,7 +13,7 @@ export function EventRow({ event, timeZone }: { event: StoredEvent; timeZone: st
         <SeverityBadge severity={event.severity} />
       </td>
       <td className="whitespace-nowrap px-4 py-2 font-mono text-xs">
-        <Link href={`/events?type=${encodeURIComponent(event.type)}`} className="hover:text-brand hover:underline">
+        <Link to={`/events?type=${encodeURIComponent(event.type)}`} className="hover:text-brand hover:underline">
           {event.type}
         </Link>
       </td>

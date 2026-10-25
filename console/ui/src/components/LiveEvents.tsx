@@ -1,13 +1,13 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
-import type { StoredEvent } from "@/lib/eventStore";
+import type { EventsResponse, StoredEvent } from "@/lib/apiTypes";
+import { useConsole } from "../console";
 import { EventRow } from "./EventRow";
 
 const POLL_MS = 3000;
 const KEEP = 500;
 
 export function LiveEvents({ initialAfter, query, timeZone }: { initialAfter: number; query: string; timeZone: string }) {
+  const { get } = useConsole();
   const [live, setLive] = useState(false);
   const [events, setEvents] = useState<StoredEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -18,9 +18,7 @@ export function LiveEvents({ initialAfter, query, timeZone }: { initialAfter: nu
     let cancelled = false;
     const poll = async () => {
       try {
-        const response = await fetch(`/api/events?${query ? `${query}&` : ""}after=${after.current}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const body = (await response.json()) as { events: StoredEvent[] };
+        const body = await get<EventsResponse>(`events?${query ? `${query}&` : ""}after=${after.current}`);
         if (cancelled) return;
         setError(null);
         if (body.events.length > 0) {
@@ -37,7 +35,7 @@ export function LiveEvents({ initialAfter, query, timeZone }: { initialAfter: nu
       cancelled = true;
       clearInterval(timer);
     };
-  }, [live, query]);
+  }, [live, query, get]);
 
   return (
     <section aria-label="Live events" className="overflow-hidden rounded-lg border border-border bg-surface">

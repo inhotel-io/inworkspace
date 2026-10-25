@@ -11,6 +11,11 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
+  {
+    // The web app is not a Next.js app: it runs on the mail server's origin and navigates itself.
+    files: ["ui/**"],
+    rules: { "@next/next/no-location-assign-relative-destination": "off" },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
