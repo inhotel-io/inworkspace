@@ -1705,18 +1705,34 @@ async function readBody(request: Request, limit: number): Promise<Uint8Array | n
 }
 ```
 
-`src/lib/startup.ts`:
+`src/lib/startup.ts` (Next.js logs a failing instrumentation hook and keeps serving, so the hook exits the process itself):
 
 ```ts
 import { getConfig } from "./config";
 import { getPool } from "./db";
 import { migrate } from "./migrations";
 
-/** Fails the server start on invalid configuration or a database that cannot be migrated. */
+/** Validates the configuration and applies migrations; throws when either fails. */
 export async function startup(): Promise<void> {
   const config = getConfig();
   const applied = await migrate(getPool());
   console.log(JSON.stringify({ severity: "INFO", message: "console.started", role: config.role, migrationsApplied: applied }));
+}
+
+/** Next.js logs a failing instrumentation hook and keeps serving, so a broken start exits the process instead. */
+export async function startupOrExit(): Promise<void> {
+  try {
+    await startup();
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        severity: "CRITICAL",
+        message: "console.startup-failed",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    process.exit(1);
+  }
 }
 ```
 
@@ -1725,8 +1741,8 @@ export async function startup(): Promise<void> {
 ```ts
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NEXT_PHASE === "phase-production-build") return;
-  const { startup } = await import("./lib/startup");
-  await startup();
+  const { startupOrExit } = await import("./lib/startup");
+  await startupOrExit();
 }
 ```
 
@@ -2820,15 +2836,22 @@ export function gateFor(path: string, config: Pick<ConsoleConfig, "role">): Gate
 
 `src/lib/operator.ts`:
 
+With Cache Components, request headers do not make a component request-time — only `connection()` does — and the data pages read the current time, so both helpers start with it:
+
 ```ts
 import "server-only";
 import { headers } from "next/headers";
 import { forbidden } from "next/navigation";
+import { connection } from "next/server";
 import { AuthError, authenticate, type Operator } from "./auth";
 import { getConfig } from "./config";
 
-/** For pages and components that read data: the gate already ran, but data access checks again. */
+/**
+ * For pages and components that read data: the gate already ran, but data access checks again.
+ * Everything after it renders per request (live data, the current time), never in a prerender.
+ */
 export async function requireOperator(): Promise<Operator> {
+  await connection();
   try {
     return await authenticate(await headers(), getConfig());
   } catch (error) {
@@ -2838,6 +2861,7 @@ export async function requireOperator(): Promise<Operator> {
 }
 
 export async function currentOperator(): Promise<Operator | null> {
+  await connection();
   try {
     return await authenticate(await headers(), getConfig());
   } catch {
@@ -4510,7 +4534,7 @@ coverage
 - [ ] **Step 3: Build the image**
 
 Run: `docker build -t inworkspace-console:dev .`
-Expected: the build completes; `docker run --rm -e CONSOLE_ROLE=ingest inworkspace-console:dev` exits with `Invalid console configuration: DATABASE_URL is required; WEBHOOK_SIGNING_KEY is required`.
+Expected: the build completes; `docker run --rm -e CONSOLE_ROLE=ingest inworkspace-console:dev` exits with status 1 after logging `console.startup-failed` with `Invalid console configuration: DATABASE_URL is required; WEBHOOK_SIGNING_KEY is required`.
 
 - [ ] **Step 4: Commit**
 
