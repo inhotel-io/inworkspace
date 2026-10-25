@@ -1,47 +1,22 @@
 import type { NextConfig } from "next";
 
-// Every page is rendered from server-side data; nothing is loaded from another origin.
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "frame-src 'self'",
-  "frame-ancestors 'none'",
-  "base-uri 'none'",
-  "form-action 'self'",
-  "object-src 'none'",
-].join("; ");
-
+// The service answers JSON and zips only; nothing it returns is meant to render or be framed.
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: process.cwd(),
   poweredByHeader: false,
-  cacheComponents: true,
-  partialPrefetching: true,
-  experimental: {
-    authInterrupts: true,
-  },
-  turbopack: {
-    root: process.cwd(),
-    rules: {
-      "*.css": {
-        loaders: ["@tailwindcss/turbopack"],
-        as: "*.css",
-      },
-    },
-  },
+  turbopack: { root: process.cwd() },
   async headers() {
-    const headers = [
-      { key: "Referrer-Policy", value: "no-referrer" },
-      { key: "X-Content-Type-Options", value: "nosniff" },
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Content-Security-Policy", value: "default-src 'none'; frame-ancestors 'none'" },
+        ],
+      },
     ];
-    if (process.env.NODE_ENV === "production") {
-      headers.push({ key: "Content-Security-Policy", value: contentSecurityPolicy });
-    }
-    return [{ source: "/:path*", headers }];
   },
 };
 
