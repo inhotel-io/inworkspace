@@ -356,28 +356,53 @@ The web app's files, none of which needs a token:
 5. It refreshes the access token when it expires. By default an access token lasts one hour
    and a refresh token 30 days.
 
-Signing out discards the tokens. A token the API has already verified stays usable there for
-at most the 60-second cache described below.
+Signing out discards the tokens in the tab. The server has no revocation endpoint, so a
+discarded token stays valid at the server until it expires: one hour for an access token, 30
+days for a refresh token. Changing the account's password revokes them all.
+
+The OAuth client's redirect URI is enforced only when the server requires registered clients.
+That is off by default, and accounts with the `oAuthClientOverride` permission bypass it.
 
 **Every API request** carries `Authorization: Bearer <access token>`. The api role:
 
-1. accepts only a well-formed bearer token: at most 1,000 characters of token characters.
-   Anything else is 401.
-2. answers from a cache of verified tokens, keyed by the token's SHA-256 and kept for 60
-   seconds, or less when the token expires sooner.
-3. otherwise checks the token by introspection, `POST /auth/introspect` at the server.
-   - It authenticates as the console principal, so an invalid or expired token is never
-     presented to the server as a failed login. The server's authentication ban therefore
-     cannot be turned against the API's own address.
-   - Introspection is limited to 120 per minute per instance; beyond that the API answers
-     429. Cached tokens are not affected.
-4. for an active token, reads the account's permissions from `GET /api/account` and its login
-   from `GET /jmap/session`, both with the operator's token.
-5. requires the permission `OPERATOR_PERMISSION`, `impersonate` by default, and, when
+1. accepts only a well-formed bearer token: 16 to 1,000 characters of `A–Z a–z 0–9 . _ -`.
+   - The server's tokens are `sw1.` followed by base64url.
+   - None of those characters grows in a form body, so the token always fits the server's
+     1,024-byte introspection form.
+   - Anything else is 401, and the server is not asked.
+2. answers from a cache keyed by the token's SHA-256.
+   - The cache holds verified tokens and refused ones alike, for 60 seconds.
+   - A verified token is held for less when it expires sooner.
+3. checks each token once at a time. Requests that arrive together with the same token share
+   one check.
+4. checks the token by introspection, `POST /auth/introspect` at the server, authenticating as
+   the console principal.
+   - An invalid or expired token is therefore never presented to the server as a failed login,
+     so the server's authentication ban cannot be turned against the API's own address.
+   - Introspection is limited to 120 per minute per instance, and to 20 per minute per client.
+     Clients are told apart by the `X-Forwarded-For` entry that `TRUSTED_PROXY_HOPS` trusted
+     proxies appended. Beyond the limit the API answers 429. Cached tokens are not affected.
+5. refuses an active token that lives longer than `MAX_ACCESS_TOKEN_LIFETIME`, one day by
+   default, without presenting it to the server.
+   - The server's introspection reports every unexpired token it issued as active, including
+     refresh tokens and calendar reply links.
+   - The grant type is sealed inside the token. Only the lifetime, `exp` minus `iat`, tells an
+     access token (one hour by default) from those (30 and 90 days by default).
+6. reads the account's permissions from `GET /api/account`, then its login from
+   `GET /jmap/session`, both with the operator's token.
+   - The reads run one after the other, because the server allows each account four
+     concurrent requests.
+   - When the server answers 429, the API retries once.
+7. requires the permission `OPERATOR_PERMISSION`, `impersonate` by default, and, when
    `ALLOWED_ACCOUNTS` is set, a login on that list. Otherwise it answers 403.
    - The default admits only accounts that could already read any mailbox through
      impersonation, so the console gives nobody new access.
    - The server's built-in recovery administrator has every permission.
+
+**If the server uses an OpenID Connect directory**, it checks a bearer token with the identity
+provider first, and counts a refusal as a failed login. Put the API's egress address on the
+server's allowed IPs (an `x:AllowedIp` record) so that no ban or rate limit applies to it. With the
+built-in directory, step 5 keeps every token the API presents valid.
 
 **Cross-origin access.** API responses allow exactly the server's origin, taken from
 `JMAP_URL`.
@@ -386,10 +411,19 @@ at most the 60-second cache described below.
 - No cookies are used, so cross-site request forgery does not apply.
 
 **The shell page** carries a content security policy in a meta tag.
-- Scripts and styles come only from the console API's origin.
+- Scripts and styles come only from `<console API>/ui/app/`, not from the rest of that
+  origin.
 - Calls go only to the page's own origin and the console API.
 - Images are only the page's own or inline.
 - Email frames inherit that policy and add their own.
+- A meta policy cannot forbid framing. Add `Content-Security-Policy: frame-ancestors 'self'`
+  through the server's own response headers (`x:Http` `responseHeaders`) to cover `/console`
+  and `/admin` alike.
+
+**Trust.** The API receives each operator's access token on every request. Those tokens are
+not limited to the console: they carry the account's full rights. The API also serves the code
+that runs on the server's origin. Treat the api service, its runtime and its logs like the
+server's own administration.
 
 **Other controls.**
 - `AUTH_MODE=none` is for local development only. It is refused when
@@ -421,6 +455,8 @@ at most the 60-second cache described below.
 | `OAUTH_CLIENT_ID` | api | The client id the web app signs in with; default `inworkspace-console`. |
 | `DISPLAY_TIME_ZONE` | api | Optional IANA time zone for displayed times; default: the browser's. |
 | `UI_DIST_DIR` | api | Directory of the built web app; default `ui-dist`. |
+| `TRUSTED_PROXY_HOPS` | api | Proxies in front of the service that append the client's address to `X-Forwarded-For`; default 0, which gives no per-client introspection limit. |
+| `MAX_ACCESS_TOKEN_LIFETIME` | api | Seconds an access token can live at most; default 86400. It must be at least the server's access-token lifetime, and below its refresh-token lifetime. |
 
 ## Server setup
 
@@ -441,6 +477,11 @@ does the same idempotently — :
    - The script only touches records whose only prefix is the console's.
    - A new record is live only after the server restarts or runs Update apps. With
      `UPDATE_APPS=1` the script runs Update apps. Otherwise it says the step is needed.
+   - A restart is the safer default, because it downloads only applications with no stored
+     copy.
+   - Update apps first deletes every stored copy, the web admin's included, then downloads each
+     again. An application whose download fails stays offline until a later update or restart
+     succeeds.
    - **Before running Update apps, check the web admin's `resourceUrl`.** If it follows
      `releases/latest`, the server downloads whatever web admin is newest, which may need a
      newer server. Point it at the release the server already serves.

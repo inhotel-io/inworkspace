@@ -77,6 +77,8 @@ Message bodies are never stored. The console keeps only events (addresses, IPs a
 | `OAUTH_CLIENT_ID` | api | The client id the web app signs in with; default `inworkspace-console`. |
 | `DISPLAY_TIME_ZONE` | api | Optional IANA time zone for displayed times; default: the browser's. |
 | `UI_DIST_DIR` | api | Directory of the built web app; default `ui-dist`. |
+| `TRUSTED_PROXY_HOPS` | api | Proxies in front of the service that append the client's address to `X-Forwarded-For`; default 0. With 0 there is no per-client introspection limit. |
+| `MAX_ACCESS_TOKEN_LIFETIME` | api | Seconds an access token can live at most; default 86400. Must be at least the server's access-token lifetime (default one hour), and below its refresh-token lifetime (default 30 days). |
 
 The service exits at startup in any of these cases:
 - the configuration is invalid;
@@ -131,9 +133,13 @@ secret. Its only redirect URI is `<SERVER_URL>/console/oauth/callback`.
 - The script never touches records that serve other paths, such as the web admin.
 
 **Making a new record live.** The server loads web applications only when it starts, or on its
-**Update apps** action. Run the script with `UPDATE_APPS=1` to run Update apps, or restart the
-server. Update apps downloads every web application again from its `resourceUrl`, the web
-admin included.
+**Update apps** action.
+- **Restarting the server is the safer way.** A restart downloads only applications it has no
+  copy of, which here means the console's shell.
+- **Update apps avoids the restart** (run the script with `UPDATE_APPS=1`). It first deletes
+  every application's stored copy, the web admin's included, then downloads each again from its
+  `resourceUrl`. An application whose download fails stays offline until a later Update apps or
+  restart succeeds.
 
 > **Check the web admin's `resourceUrl` first.** If it ends in
 > `releases/latest/download/webui.zip`, the server installs whatever web admin is newest. That
@@ -184,6 +190,10 @@ The reference deployment is Google Cloud Run:
     directly.
   - Every API request must carry an operator's access token.
   - Set `PUBLIC_URL` to the service's URL.
+  - Set `TRUSTED_PROXY_HOPS=1`: Cloud Run appends the client's address to
+    `X-Forwarded-For`.
+  - Cap the instance count, for example `--max-instances 3`. Each instance has its own
+    introspection budget, and every introspection runs as the console principal.
 - **ingest service**: `CONSOLE_ROLE=ingest`, publicly reachable so the mail server can post to
   it. Every request must carry a valid signature.
 - **Database**: Cloud SQL Postgres through the built-in connector:
@@ -196,6 +206,22 @@ The reference deployment is Google Cloud Run:
 
 A new console version needs only the deploy: the next page load picks up the new code. Run
 [`scripts/server-setup.mjs`](#server-setup) again only when the shell's settings change.
+
+## Upgrading from 0.1
+
+Version 0.1 had a server-rendered console behind Google identity, with roles `web` and
+`ingest`. Version 0.2 replaces the web role. To upgrade:
+
+1. Deploy the image as a new **api** service, with these changes from the old web service:
+   - `CONSOLE_ROLE=api` instead of `web`, and `PUBLIC_URL` set to the new service's URL;
+   - remove `AUTH_MODE=iap|cloud-run`, `IAP_AUDIENCE`, `IAP_JWKS_URL`, `ALLOWED_EMAILS` and
+     `ALLOWED_DOMAINS`;
+   - optionally add `ALLOWED_ACCOUNTS`. It holds mail-server logins, not Google addresses;
+   - make it publicly reachable.
+2. Deploy the same image to the ingest service; nothing else changes there.
+3. Run [`scripts/server-setup.mjs`](#server-setup) with `CONSOLE_URL` set to the api service.
+   Then restart the server, or run Update apps.
+4. Open `<server>/console/`, sign in, and delete the old web service. Its URL now answers 404.
 
 ## Access
 
@@ -225,19 +251,34 @@ Logs are JSON lines.
   - The api role checks each access token by introspection at the server, authenticating as
     the console principal. An invalid token therefore never counts as a failed login against
     the API's own address.
-  - It then reads the account's permissions and login with the token.
-  - It caches the result for 60 seconds, or until the token expires if that is sooner.
-  - Introspections are limited to 120 a minute per instance; beyond that it answers 429.
-  - Signing out discards the token in the browser. A token the API has already verified stays
-    usable there for at most a minute.
+  - It refuses tokens that live longer than an access token can, such as refresh tokens and
+    calendar reply links. The server's introspection reports those as active too.
+  - It then reads the account's permissions and login with the token, one request at a time.
+  - It checks each token once at a time, and remembers the answer, yes or no, for up to 60
+    seconds.
+  - Introspections are limited to 120 a minute per instance, and 20 per client. Beyond that it
+    answers 429.
+  - If the server uses an OpenID Connect directory, add the API's egress address to the
+    server's allowed IPs. See the design's sign-in section.
+- **Signing out** discards the tokens in the tab. The server has no revocation endpoint, so a
+  discarded token stays valid until it expires: one hour for access, 30 days for refresh.
+  Changing the account's password revokes them all.
+- **The OAuth client's redirect URI** is enforced only when the server requires registered
+  clients. That is off by default, and accounts with `oAuthClientOverride` bypass it.
+- **Framing**: the shell's meta policy cannot forbid framing. Add
+  `Content-Security-Policy: frame-ancestors 'self'` to the server's own response headers
+  (`x:Http` `responseHeaders`).
 - **In the browser.**
   - Tokens live in `sessionStorage`, one tab at a time.
   - API responses allow only the server's origin, and no cookies are used.
   - The shell page carries a content security policy. Scripts and styles come only from the
-    console API, and calls go only to the server and the console API.
-  - The console API serves the app's code to the server's origin. Treat the api service like
-    the server's own web admin: whoever can change its code can act as any operator who opens
-    the console.
+    console API's `/ui/app/`, and calls go only to the server and the console API.
+  - **Treat the api service like the server's own administration.**
+    - The api service serves the app's code to the server's origin.
+    - It receives each operator's access token on every request, and those tokens carry the
+      account's full rights.
+    - So whoever can change the api service, or read its memory or logs, can act as any
+      operator.
 - Email HTML is sanitized by the API and shown in an `iframe` with an empty `sandbox`
   attribute. A content security policy there blocks every remote resource, so tracking pixels
   never load.
