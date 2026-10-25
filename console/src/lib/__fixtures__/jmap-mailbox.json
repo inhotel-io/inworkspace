@@ -1,0 +1,83 @@
+{
+  "mailboxes": [
+    { "id": "a", "name": "Inbox", "role": "inbox" },
+    { "id": "b", "name": "Deleted Items", "role": "trash" },
+    { "id": "c", "name": "Junk Mail", "role": "junk" },
+    { "id": "d", "name": "Drafts", "role": "drafts" },
+    { "id": "e", "name": "Sent Items", "role": "sent" }
+  ],
+  "latest": [
+    {
+      "id": "maaaaah", "threadId": "d", "subject": "Re: Parking at the hotel",
+      "from": [{ "name": "Front desk agent", "email": "a21i3v9v@agents.example.test" }],
+      "to": [{ "name": "Jane Guest", "email": "jane@example.com" }],
+      "receivedAt": "2026-10-25T11:20:29Z", "mailboxIds": { "e": true }, "keywords": { "$seen": true },
+      "preview": "Hi Jane, yes: on-site parking is available for 15 EUR per night.", "header:Auto-Submitted:asText": null
+    },
+    {
+      "id": "baaaaaai", "threadId": "i", "subject": "Failed to deliver message",
+      "from": [{ "name": "Mail Delivery Subsystem", "email": "MAILER-DAEMON@localhost.local" }],
+      "to": [{ "name": null, "email": "a21i3v9v@agents.example.test" }],
+      "receivedAt": "2026-10-25T11:20:29Z", "mailboxIds": { "a": true }, "keywords": {},
+      "preview": "Your message could not be delivered to the following recipients", "header:Auto-Submitted:asText": "auto-generated"
+    },
+    {
+      "id": "yaaaaag", "threadId": "g", "subject": "Re: Late check-in on Friday?",
+      "from": [{ "name": "Jane Guest", "email": "jane@example.com" }],
+      "to": [{ "name": null, "email": "a21i3v9v@agents.example.test" }],
+      "receivedAt": "2026-10-25T11:19:51Z", "mailboxIds": { "c": true }, "keywords": { "$junk": true },
+      "preview": "Thank you! See you Friday.", "header:Auto-Submitted:asText": null
+    },
+    {
+      "id": "eaaaaaf", "threadId": "b", "subject": "Re: Late check-in on Friday?",
+      "from": [{ "name": "Jane Guest", "email": "jane@example.com" }],
+      "to": [{ "name": null, "email": "a21i3v9v@agents.example.test" }],
+      "receivedAt": "2026-10-25T11:18:35Z", "mailboxIds": { "a": true }, "keywords": {},
+      "preview": "Thank you! See you Friday.", "header:Auto-Submitted:asText": null
+    }
+  ],
+  "threads": [
+    { "id": "d", "emailIds": ["maaaaad", "maaaaah"] },
+    { "id": "i", "emailIds": ["baaaaaai"] },
+    { "id": "g", "emailIds": ["yaaaaag"] },
+    { "id": "b", "emailIds": ["eaaaaab", "eaaaaac", "eaaaaaf"] }
+  ],
+  "thread": [
+    {
+      "id": "eaaaaaf", "threadId": "b", "subject": "Re: Late check-in on Friday?",
+      "from": [{ "name": "Jane Guest", "email": "jane@example.com" }],
+      "to": [{ "name": null, "email": "a21i3v9v@agents.example.test" }], "cc": null,
+      "receivedAt": "2026-10-25T11:18:35Z", "mailboxIds": { "a": true }, "keywords": {},
+      "header:Auto-Submitted:asText": null,
+      "textBody": [{ "partId": "1", "size": 27, "name": null, "type": "text/plain" }],
+      "htmlBody": [{ "partId": "1", "size": 27, "name": null, "type": "text/plain" }],
+      "bodyValues": { "1": { "value": "Thank you! See you Friday.\n", "isTruncated": false } },
+      "attachments": []
+    },
+    {
+      "id": "eaaaaab", "threadId": "b", "subject": "Late check-in on Friday?",
+      "from": [{ "name": "Jane Guest", "email": "jane@example.com" }],
+      "to": [{ "name": null, "email": "a21i3v9v@agents.example.test" }], "cc": null,
+      "receivedAt": "2026-10-25T11:16:02Z", "mailboxIds": { "a": true }, "keywords": {},
+      "header:Auto-Submitted:asText": null,
+      "textBody": [{ "partId": "1", "size": 51, "name": null, "type": "text/plain" }],
+      "htmlBody": [{ "partId": "2", "size": 160, "name": null, "type": "text/html" }],
+      "bodyValues": {
+        "1": { "value": "Hi, can I check in at 11pm on Friday? Thanks, Jane\n", "isTruncated": false },
+        "2": { "value": "<html><body><p>Hi, can I check in at 11pm on Friday? Thanks, Jane</p><img src='https://tracker.example/pixel.gif'><script>alert(1)</script></body></html>", "isTruncated": false }
+      },
+      "attachments": [{ "partId": "3", "size": 20480, "name": "booking.pdf", "type": "application/pdf" }]
+    },
+    {
+      "id": "eaaaaac", "threadId": "b", "subject": "Re: Late check-in on Friday?",
+      "from": [{ "name": "Front desk agent", "email": "a21i3v9v@agents.example.test" }],
+      "to": [{ "name": "Jane Guest", "email": "jane@example.com" }], "cc": null,
+      "receivedAt": "2026-10-25T11:17:10Z", "mailboxIds": { "e": true }, "keywords": { "$seen": true },
+      "header:Auto-Submitted:asText": null,
+      "textBody": [{ "partId": "t", "size": 80, "name": null, "type": "text/plain" }],
+      "htmlBody": [{ "partId": "t", "size": 80, "name": null, "type": "text/plain" }],
+      "bodyValues": { "t": { "value": "Hi Jane, yes - late check-in at 11pm is fine. The night desk will have your key.", "isTruncated": true } },
+      "attachments": []
+    }
+  ]
+}
