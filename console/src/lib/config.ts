@@ -176,8 +176,9 @@ export function parseConfig(env: Env): ConsoleConfig {
       "MAX_ACCESS_TOKEN_LIFETIME",
       86400,
       60,
-      2_592_000,
-      "MAX_ACCESS_TOKEN_LIFETIME must be a whole number of seconds from 60 to 2592000",
+      // A week: well below the 30 days refresh tokens live by default.
+      604_800,
+      "MAX_ACCESS_TOKEN_LIFETIME must be a whole number of seconds from 60 to 604800",
     );
   }
 

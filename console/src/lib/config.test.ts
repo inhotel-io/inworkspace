@@ -131,7 +131,7 @@ describe("parseConfig", () => {
     expect(problemsOf({ ...API, TRUSTED_PROXY_HOPS: "-1", MAX_ACCESS_TOKEN_LIFETIME: "0" })).toEqual(
       expect.arrayContaining([
         "TRUSTED_PROXY_HOPS must be a whole number from 0 to 10",
-        "MAX_ACCESS_TOKEN_LIFETIME must be a whole number of seconds from 60 to 2592000",
+        "MAX_ACCESS_TOKEN_LIFETIME must be a whole number of seconds from 60 to 604800",
       ]),
     );
   });

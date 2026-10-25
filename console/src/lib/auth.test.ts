@@ -15,8 +15,10 @@ interface FakeServer {
   username?: string;
   introspectStatus?: number;
   introspectBody?: string;
-  /** Answers for /api/account, in order; the last one repeats. */
-  accountStatuses?: number[];
+  /** The principal is at its limit of concurrent requests for this many introspections. */
+  introspectAtLimit?: number;
+  /** Answers for /api/account, in order; the last one repeats. "limit": the account is at its limit of concurrent requests. */
+  accountStatuses?: (number | "limit")[];
   failWith?: Error;
 }
 
@@ -31,6 +33,8 @@ function fakeServer(options: FakeServer = {}) {
   let inFlight = 0;
   let maxInFlight = 0;
   let accountCalls = 0;
+  let introspections = 0;
+  const atLimit = () => Response.json({ type: "urn:ietf:params:jmap:error:limit", status: 400, limit: "maxConcurrentRequests" }, { status: 400 });
   const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     if (options.failWith) throw options.failWith;
     const url = new URL(String(input));
@@ -44,6 +48,8 @@ function fakeServer(options: FakeServer = {}) {
     await new Promise((resolve) => setTimeout(resolve, 1));
     inFlight -= 1;
     if (url.pathname === "/auth/introspect") {
+      introspections += 1;
+      if (introspections <= (options.introspectAtLimit ?? 0)) return atLimit();
       if (options.introspectStatus) return new Response("", { status: options.introspectStatus });
       if (options.introspectBody !== undefined) return new Response(options.introspectBody, { status: 200 });
       const iat = NOW / 1000 - 60;
@@ -57,6 +63,7 @@ function fakeServer(options: FakeServer = {}) {
       const statuses = options.accountStatuses ?? [200];
       const status = statuses[Math.min(accountCalls, statuses.length - 1)]!;
       accountCalls += 1;
+      if (status === "limit") return atLimit();
       if (status !== 200) return new Response("", { status });
       return Response.json({ permissions: options.permissions ?? ["authenticate", "impersonate"], edition: "community", locale: "en" });
     }
@@ -115,6 +122,15 @@ describe("forwardedClient", () => {
     const headers = new Headers({ "X-Forwarded-For": "203.0.113.9, 198.51.100.7" });
     expect(forwardedClient(1)(headers)).toBe("198.51.100.7");
     expect(forwardedClient(2)(headers)).toBe("203.0.113.9");
+  });
+
+  it("counts an IPv6 client by its /64, and a mapped IPv4 address as IPv4", () => {
+    const of = (address: string) => forwardedClient(1)(new Headers({ "X-Forwarded-For": address }));
+    expect(of("2001:db8:abcd:12:1::5")).toBe("2001:db8:abcd:12::/64");
+    expect(of("2001:DB8:ABCD:0012:ffff:ffff:ffff:ffff")).toBe("2001:db8:abcd:12::/64");
+    expect(of("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(of("::ffff:198.51.100.7")).toBe("198.51.100.7");
+    expect(of("198.51.100.7")).toBe("198.51.100.7");
   });
 
   it("knows no client without trusted proxies or the header", () => {
@@ -228,10 +244,28 @@ describe("createTokenVerifier", () => {
     await expect(verify(bearer("sw1.another-client-xxx", "198.51.100.7"))).rejects.toBeInstanceOf(AuthError);
   });
 
-  it("retries once when the server limits the operator's account", async () => {
-    const server = fakeServer({ accountStatuses: [429, 200] });
+  it("retries once when the operator's account is at its limit of concurrent requests", async () => {
+    const server = fakeServer({ accountStatuses: ["limit", 200] });
     await expect(verifierFor(server)(bearer())).resolves.toEqual({ login: "admin" });
     expect(server.calls.filter((call) => call.path === "/api/account")).toHaveLength(2);
+  });
+
+  it("retries an introspection once when the principal is at its limit of concurrent requests", async () => {
+    const server = fakeServer({ introspectAtLimit: 1 });
+    await expect(verifierFor(server)(bearer())).resolves.toEqual({ login: "admin" });
+    expect(server.calls.filter((call) => call.path === "/auth/introspect")).toHaveLength(2);
+  });
+
+  it("lets a session that already passed be checked again without using the budget", async () => {
+    const server = fakeServer();
+    const clock = { now: NOW };
+    const verify = verifierFor(server, clock, { perMinute: 1, perClientPerMinute: 1 });
+    await verify(bearer(TOKEN, "203.0.113.9"));
+    clock.now += 61_000;
+    await expect(verify(bearer(TOKEN, "203.0.113.9"))).resolves.toEqual({ login: "admin" });
+    clock.now += 61_000;
+    await expect(verify(bearer(TOKEN, "203.0.113.9"))).resolves.toEqual({ login: "admin" });
+    await expect(verify(bearer("sw1.a-new-session-xxxx", "203.0.113.9"))).resolves.toEqual({ login: "admin" });
   });
 
   it("reports a server it cannot ask, or cannot understand, as unavailable", async () => {
@@ -241,7 +275,9 @@ describe("createTokenVerifier", () => {
       { introspectStatus: 413 },
       { introspectBody: "<html>proxy error</html>" },
       { accountStatuses: [500] },
-      { accountStatuses: [429, 429] },
+      { accountStatuses: [429] },
+      { accountStatuses: ["limit", "limit"] },
+      { introspectAtLimit: 2 },
     ] satisfies FakeServer[]) {
       await expect(verifierFor(fakeServer(options))(bearer())).rejects.toBeInstanceOf(VerifierUnavailableError);
     }

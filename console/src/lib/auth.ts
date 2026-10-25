@@ -69,6 +69,22 @@ export function bearerToken(headers: Headers): string {
   return token;
 }
 
+/** An IPv6 client is counted by its /64, since one host can hold a whole /64; IPv4 as is. */
+function clientKey(address: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address);
+  if (mapped) return mapped[1]!;
+  if (!address.includes(":")) return address;
+  const [head = "", tail = ""] = address.toLowerCase().split("::");
+  const front = head ? head.split(":") : [];
+  const back = address.includes("::") && tail ? tail.split(":") : [];
+  const groups = address.includes("::") ? [...front, ...Array<string>(8 - front.length - back.length).fill("0"), ...back] : front;
+  if (groups.length !== 8 || !groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return address.toLowerCase();
+  return `${groups
+    .slice(0, 4)
+    .map((group) => Number.parseInt(group, 16).toString(16))
+    .join(":")}::/64`;
+}
+
 /**
  * The client's address as the trusted proxies in front of this service recorded it: each appends
  * the address it saw to X-Forwarded-For, so the client is the entry `hops` from the end. Entries
@@ -81,8 +97,19 @@ export function forwardedClient(hops: number): (headers: Headers) => string | nu
       .split(",")
       .map((entry) => entry.trim())
       .filter((entry) => entry.length > 0);
-    return entries.length >= hops ? entries[entries.length - hops]! : null;
+    return entries.length >= hops ? clientKey(entries[entries.length - hops]!) : null;
   };
+}
+
+/** The server's answer when an account already has as many requests in progress as it may. */
+async function atConcurrencyLimit(response: Response): Promise<boolean> {
+  if (response.status !== 400) return false;
+  try {
+    const body = (await response.clone().json()) as { type?: unknown };
+    return body.type === "urn:ietf:params:jmap:error:limit";
+  } catch {
+    return false;
+  }
 }
 
 function messageOf(error: unknown): string {
@@ -114,28 +141,42 @@ export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
   const basic = `Basic ${Buffer.from(`${options.principal.username}:${options.principal.password}`).toString("base64")}`;
   const cache = new Map<string, { outcome: Outcome; expiresAt: number }>();
   const checking = new Map<string, Promise<Outcome>>();
+  // Sessions that already passed, until their token expires: checking them again costs no budget,
+  // so a flood of strangers' tokens can only delay new sign-ins.
+  const passed = new Map<string, number>();
   const windows = new Map<string, { startedAt: number; count: number }>();
 
-  function windowOf(name: string, at: number) {
-    let window = windows.get(name);
-    if (!window || at - window.startedAt >= MINUTE_MS) {
-      window = { startedAt: at, count: 0 };
-      windows.set(name, window);
-    }
-    return window;
+  function current(name: string, at: number) {
+    const window = windows.get(name);
+    return window && at - window.startedAt < MINUTE_MS ? window : null;
   }
 
   function countIntrospection(client: string | null, at: number): void {
-    const all = windowOf("*", at);
-    const own = client === null ? null : windowOf(`client ${client}`, at);
-    if (all.count >= perMinute || (own && own.count >= perClientPerMinute)) {
-      throw new RateLimitError("Too many sign-in checks. Try again in a minute.");
-    }
+    const refuse = () => new RateLimitError("Too many sign-in checks. Try again in a minute.");
+    const all = current("*", at) ?? { startedAt: at, count: 0 };
+    if (all.count >= perMinute) throw refuse();
+    const name = client === null ? null : `client ${client}`;
+    const own = name === null ? null : (current(name, at) ?? { startedAt: at, count: 0 });
+    if (own && own.count >= perClientPerMinute) throw refuse();
+    // Windows are written only for admitted checks, so the table grows no faster than the budget.
     all.count += 1;
-    if (own) own.count += 1;
-    if (windows.size > 10_000) {
-      for (const [name, window] of windows) if (at - window.startedAt >= MINUTE_MS) windows.delete(name);
+    windows.set("*", all);
+    if (own && name) {
+      own.count += 1;
+      windows.set(name, own);
     }
+    if (windows.size > 10_000) {
+      for (const [key, window] of windows) if (at - window.startedAt >= MINUTE_MS) windows.delete(key);
+    }
+  }
+
+  function rememberPassed(key: string, expiresAt: number, at: number): void {
+    if (passed.size >= maxCacheEntries * 10) {
+      for (const [hash, until] of passed) if (until <= at) passed.delete(hash);
+      const oldest = passed.keys().next();
+      if (passed.size >= maxCacheEntries * 10 && !oldest.done) passed.delete(oldest.value);
+    }
+    passed.set(key, expiresAt);
   }
 
   function remember(key: string, outcome: Outcome, expiresAt: number): Outcome {
@@ -147,12 +188,21 @@ export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
     return outcome;
   }
 
-  async function ask(path: string, init: RequestInit): Promise<Response> {
+  async function send(path: string, init: RequestInit): Promise<Response> {
     try {
       return await fetchImpl(`${options.serverUrl}${path}`, { ...init, cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
     } catch (error) {
       throw new VerifierUnavailableError(`the mail server did not answer ${path}: ${messageOf(error)}`);
     }
+  }
+
+  /** One retry when the account is at its limit of concurrent requests; per-minute limits are not retried. */
+  async function ask(path: string, init: RequestInit): Promise<Response> {
+    const response = await send(path, init);
+    if (!(await atConcurrencyLimit(response))) return response;
+    await response.body?.cancel();
+    await sleep(RETRY_AFTER_LIMIT_MS);
+    return send(path, init);
   }
 
   async function jsonOf(response: Response, path: string): Promise<Record<string, unknown>> {
@@ -167,13 +217,7 @@ export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
 
   /** A read with the operator's token; null when the server refuses the token. */
   async function readAsOperator(path: string, token: string): Promise<Record<string, unknown> | null> {
-    let response = await ask(path, { headers: { Authorization: `Bearer ${token}` } });
-    if (response.status === 429) {
-      // The server limits concurrent requests per account; the operator's browser may be busy.
-      await response.body?.cancel();
-      await sleep(RETRY_AFTER_LIMIT_MS);
-      response = await ask(path, { headers: { Authorization: `Bearer ${token}` } });
-    }
+    const response = await ask(path, { headers: { Authorization: `Bearer ${token}` } });
     if (response.status === 401) {
       await response.body?.cancel();
       return null;
@@ -187,8 +231,11 @@ export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
 
   async function check(key: string, token: string, client: string | null): Promise<Outcome> {
     const at = now();
-    countIntrospection(client, at);
-    const refused = (status: 401 | 403, message: string) => remember(key, { refusal: new AuthError(status, message) }, at + cacheMs);
+    if ((passed.get(key) ?? 0) <= at) countIntrospection(client, at);
+    const refused = (status: 401 | 403, message: string) => {
+      passed.delete(key);
+      return remember(key, { refusal: new AuthError(status, message) }, at + cacheMs);
+    };
 
     const introspection = await ask("/auth/introspect", {
       method: "POST",
@@ -222,6 +269,7 @@ export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
     if (options.allowedAccounts.length > 0 && !options.allowedAccounts.includes(login)) {
       return refused(403, `${login} is not allowed to use the console`);
     }
+    rememberPassed(key, state.exp * 1000, at);
     return remember(key, { operator: { login } }, Math.min(at + cacheMs, state.exp * 1000));
   }
 
