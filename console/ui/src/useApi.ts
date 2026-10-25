@@ -18,7 +18,9 @@ export function useApi<T>(path: string | null): Loaded<T> {
     if (path === null) return;
     const controller = new AbortController();
     get<T>(path, controller.signal).then(
-      (data) => setLoaded({ path, value: { status: "ready", data } }),
+      (data) => {
+        if (!controller.signal.aborted) setLoaded({ path, value: { status: "ready", data } });
+      },
       (error: unknown) => {
         if (!controller.signal.aborted) setLoaded({ path, value: { status: "error", error: asFailure(error) } });
       },

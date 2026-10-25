@@ -14,6 +14,21 @@ interface ConsoleValue {
 
 const ConsoleContext = createContext<ConsoleValue | null>(null);
 
+/** One trip to the sign-in page per page load, however many requests find the session ended. */
+const signInOnce = (() => {
+  let started = false;
+  return async (start: () => Promise<string>): Promise<void> => {
+    if (started) return;
+    started = true;
+    try {
+      window.location.assign(await start());
+    } catch (error) {
+      started = false;
+      throw error;
+    }
+  };
+})();
+
 /** The app's route, from the hash: "#/events?severity=error" → "/events?severity=error". */
 export function routeFromHash(hash: string): string {
   return hash.startsWith("#/") ? hash.slice(1) : "/";
@@ -33,9 +48,7 @@ function sessionEnvironment(settings: UiSettings): SessionEnvironment {
 export function ConsoleProvider({ settings, children }: { settings: UiSettings; children: ReactNode }) {
   const value = useMemo<ConsoleValue>(() => {
     const session = sessionEnvironment(settings);
-    const signIn = async (returnTo: string) => {
-      window.location.assign(await beginSignIn(session, returnTo));
-    };
+    const signIn = (returnTo: string) => signInOnce(() => beginSignIn(session, returnTo));
     return {
       settings,
       get: createApiClient({

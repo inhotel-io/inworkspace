@@ -27,16 +27,22 @@ describe("shellPage", () => {
     expect(shellPage(SETTINGS)).toContain('<script type="module" src="https://console-api.example.com/ui/app/entry.js"></script>');
   });
 
+  it("says what is wrong when the app cannot load", () => {
+    const html = shellPage({ ...SETTINGS, apiUrl: "https://console-api.example.com" });
+    expect(html).toContain('<div id="root"><p>Loading the inWorkspace Console…</p>');
+    expect(html).toContain("If this message stays, the console's API at https://console-api.example.com cannot be reached.");
+  });
+
   it("escapes the values it writes into attributes", () => {
     expect(shellPage({ ...SETTINGS, clientId: 'x"><script>' })).toContain('content="x&quot;&gt;&lt;script&gt;"');
   });
 });
 
 describe("contentSecurityPolicy", () => {
-  it("allows scripts and styles only from the console API, and calls only to it and the page's origin", () => {
+  it("allows scripts and styles only from the app's path on the console API, and calls only to it and the page's origin", () => {
     const policy = contentSecurityPolicy("https://console-api.example.com");
-    expect(policy).toContain("script-src https://console-api.example.com;");
-    expect(policy).toContain("style-src https://console-api.example.com 'unsafe-inline';");
+    expect(policy).toContain("script-src https://console-api.example.com/ui/app/;");
+    expect(policy).toContain("style-src https://console-api.example.com/ui/app/ 'unsafe-inline';");
     expect(policy).toContain("connect-src 'self' https://console-api.example.com;");
     expect(policy).toContain("object-src 'none'");
   });

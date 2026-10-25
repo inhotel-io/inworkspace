@@ -16,6 +16,8 @@ export function LiveEvents({ initialAfter, query, timeZone }: { initialAfter: nu
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Each poll starts after the previous one ends, so slow answers never overlap or repeat rows.
     const poll = async () => {
       try {
         const body = await get<EventsResponse>(`events?${query ? `${query}&` : ""}after=${after.current}`);
@@ -28,12 +30,12 @@ export function LiveEvents({ initialAfter, query, timeZone }: { initialAfter: nu
       } catch (caught) {
         if (!cancelled) setError(caught instanceof Error ? caught.message : String(caught));
       }
+      if (!cancelled) timer = setTimeout(poll, POLL_MS);
     };
     void poll();
-    const timer = setInterval(poll, POLL_MS);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
   }, [live, query, get]);
 

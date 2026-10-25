@@ -24,7 +24,7 @@ interface Seen {
 }
 
 /** The API answers 401 to every token in `expired`; the token endpoint hands out access-2, access-3, … */
-function servers(options: { expired?: string[]; refuseRefresh?: boolean; apiStatus?: number; apiBody?: unknown } = {}) {
+function servers(options: { expired?: string[]; refuseRefresh?: boolean; refreshUnavailable?: boolean; apiStatus?: number; apiBody?: unknown } = {}) {
   const seen: Seen[] = [];
   let issued = 1;
   const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -32,6 +32,7 @@ function servers(options: { expired?: string[]; refuseRefresh?: boolean; apiStat
     seen.push({ url, authorization: new Headers(init?.headers).get("authorization") });
     if (url === `${ORIGIN}/auth/token`) {
       if (options.refuseRefresh) return Response.json({ error: "invalid_grant" }, { status: 400 });
+      if (options.refreshUnavailable) return new Response("", { status: 503 });
       issued += 1;
       return Response.json({ access_token: `access-${issued}`, expires_in: 3600 });
     }
@@ -76,6 +77,14 @@ describe("createApiClient", () => {
     await expect(get("me")).rejects.toMatchObject({ name: "ApiFailure", status: 401 });
     expect(ended()).toBe(1);
     expect(store.data.has(TOKENS)).toBe(false);
+  });
+
+  it("keeps the session when the refresh cannot reach the server", async () => {
+    const store = memoryStore({ accessToken: "access-1", refreshToken: "refresh-1", expiresAt: NOW + 3_600_000 });
+    const { get, ended } = clientFor(store, servers({ expired: ["access-1"], refreshUnavailable: true }));
+    await expect(get("me")).rejects.toMatchObject({ status: 503, code: "unavailable" });
+    expect(ended()).toBe(0);
+    expect(store.data.has(TOKENS)).toBe(true);
   });
 
   it("ends the session without a request when there are no tokens", async () => {

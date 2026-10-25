@@ -128,6 +128,14 @@ describe("completeSignIn", () => {
     await expect(
       completeSignIn(environment(declined), new URL(`${ORIGIN}/console/oauth/callback?error=access_denied`)),
     ).rejects.toThrow("access_denied");
+    const spoofed = memoryStore();
+    await startedSignIn(spoofed);
+    const failure = completeSignIn(
+      environment(spoofed),
+      new URL(`${ORIGIN}/console/oauth/callback?error=Call%20us&error_description=Your%20account%20is%20locked%2C%20call%20555`),
+    );
+    await expect(failure).rejects.toThrow("The mail server did not sign you in.");
+    await expect(failure).rejects.not.toThrow(/555|Call us/);
   });
 });
 
@@ -141,20 +149,30 @@ describe("refreshTokens", () => {
   it("replaces the access token and keeps the refresh token when none is returned", async () => {
     const store = signedIn("refresh-1");
     const server = tokenServer({ body: { access_token: "access-2", expires_in: 600 } });
-    await expect(refreshTokens(environment(store, server.fetch))).resolves.toBe(true);
+    await expect(refreshTokens(environment(store, server.fetch))).resolves.toBe("renewed");
     expect(Object.fromEntries(server.calls[0]!.form)).toEqual({ grant_type: "refresh_token", refresh_token: "refresh-1", client_id: "inworkspace-console" });
     expect(readTokens(store)).toEqual({ accessToken: "access-2", refreshToken: "refresh-1", expiresAt: NOW + 600_000 });
   });
 
   it("ends the session when the server refuses the refresh", async () => {
     const store = signedIn("refresh-1");
-    await expect(refreshTokens(environment(store, tokenServer({ status: 400, body: { error: "invalid_grant" } }).fetch))).resolves.toBe(false);
+    await expect(refreshTokens(environment(store, tokenServer({ status: 400, body: { error: "invalid_grant" } }).fetch))).resolves.toBe("ended");
     expect(readTokens(store)).toBeNull();
+  });
+
+  it("keeps the session when the server cannot answer", async () => {
+    const store = signedIn("refresh-1");
+    await expect(refreshTokens(environment(store, tokenServer({ status: 503, body: {} }).fetch))).resolves.toBe("unavailable");
+    const offline = (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof globalThis.fetch;
+    await expect(refreshTokens(environment(store, offline))).resolves.toBe("unavailable");
+    expect(readTokens(store)?.refreshToken).toBe("refresh-1");
   });
 
   it("does nothing without a refresh token", async () => {
     const server = tokenServer({ body: {} });
-    await expect(refreshTokens(environment(signedIn(null), server.fetch))).resolves.toBe(false);
+    await expect(refreshTokens(environment(signedIn(null), server.fetch))).resolves.toBe("ended");
     expect(server.calls).toHaveLength(0);
   });
 });

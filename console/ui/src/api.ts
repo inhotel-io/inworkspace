@@ -1,5 +1,5 @@
 import type { ApiErrorBody } from "@/lib/apiTypes";
-import { clearTokens, readTokens, refreshTokens, type SessionEnvironment } from "./auth/session";
+import { clearTokens, readTokens, refreshTokens, type RefreshOutcome, type SessionEnvironment } from "./auth/session";
 
 export class ApiFailure extends Error {
   constructor(
@@ -27,8 +27,8 @@ const EARLY_REFRESH_MS = 30_000;
 
 export function createApiClient(options: ApiClientOptions): ApiGet {
   const { session } = options;
-  let refreshing: Promise<boolean> | null = null;
-  const refresh = (): Promise<boolean> =>
+  let refreshing: Promise<RefreshOutcome> | null = null;
+  const refresh = (): Promise<RefreshOutcome> =>
     (refreshing ??= refreshTokens(session).finally(() => {
       refreshing = null;
     }));
@@ -58,8 +58,11 @@ export function createApiClient(options: ApiClientOptions): ApiGet {
     if (response.status === 401) {
       // Another request may already have renewed the token this one was sent with.
       const latest = readTokens(session.store);
-      const renewedElsewhere = latest !== null && latest.accessToken !== tokens.accessToken;
-      const renewed = renewedElsewhere || (await refresh()) ? readTokens(session.store) : null;
+      const outcome = latest !== null && latest.accessToken !== tokens.accessToken ? "renewed" : await refresh();
+      if (outcome === "unavailable") {
+        throw new ApiFailure(503, "unavailable", "The mail server could not renew the session. Try again shortly.");
+      }
+      const renewed = outcome === "renewed" ? readTokens(session.store) : null;
       if (renewed) response = await send(path, renewed.accessToken, signal);
     }
     if (response.status === 401) throw ended("The session ended. Sign in again.");

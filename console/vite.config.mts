@@ -7,10 +7,11 @@ const mailServer = process.env.CONSOLE_MAIL_SERVER ?? "http://localhost:18080";
 const consoleApi = process.env.CONSOLE_API ?? "http://localhost:3100";
 
 /**
- * In production the console service writes its settings into index.html (src/lib/uiBundle.ts).
- * The development server fills them itself. API calls stay on its own origin and are proxied,
- * as are the mail server's sign-in paths. The page gets no content security policy, because
- * Vite injects inline scripts.
+ * In production the server hosts a shell page that the console service generates
+ * (src/lib/uiBundle.ts); ui/index.html is the development page and the build's entry. The
+ * development server fills in its settings: API calls stay on its own origin and are proxied, as
+ * are the mail server's sign-in paths. The page gets no content security policy, because Vite
+ * injects inline scripts.
  */
 function developmentSettings(): Plugin {
   return {

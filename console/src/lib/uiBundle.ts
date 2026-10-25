@@ -63,13 +63,16 @@ function escapeAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** The shell's policy: code and styles only from the console API, calls only to it and the server. */
+/**
+ * The shell's policy: code and styles only from the app's path on the console API (not the rest of
+ * that origin), and calls only to the API and the server.
+ */
 export function contentSecurityPolicy(apiUrl: string): string {
   const api = new URL(apiUrl).origin;
   return [
     "default-src 'self'",
-    `script-src ${api}`,
-    `style-src ${api} 'unsafe-inline'`,
+    `script-src ${api}/ui/app/`,
+    `style-src ${api}/ui/app/ 'unsafe-inline'`,
     "img-src 'self' data:",
     "font-src 'self' data:",
     `connect-src 'self' ${api}`,
@@ -99,7 +102,8 @@ export function shellPage(settings: UiSettings): string {
     "<title>inWorkspace Console</title>",
     `<script type="module" src="${escapeAttribute(`${settings.apiUrl}/ui/app/entry.js`)}"></script>`,
     "</head>",
-    '<body><div id="root"></div></body>',
+    // The app replaces this; it stays only when the app's code cannot be loaded.
+    `<body><div id="root"><p>Loading the inWorkspace Console…</p><p>If this message stays, the console's API at ${escapeAttribute(settings.apiUrl)} cannot be reached.</p></div></body>`,
     "</html>",
     "",
   ].join("\n");

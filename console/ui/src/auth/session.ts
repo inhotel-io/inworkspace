@@ -19,6 +19,9 @@ export interface SessionEnvironment {
   now: () => number;
 }
 
+/** What a refresh came to: a new access token, a session the server ended, or no answer yet. */
+export type RefreshOutcome = "renewed" | "ended" | "unavailable";
+
 export class SignInError extends Error {
   constructor(message: string) {
     super(message);
@@ -133,7 +136,9 @@ export async function completeSignIn(env: SessionEnvironment, callback: URL): Pr
   }
   const error = callback.searchParams.get("error");
   if (error) {
-    throw new SignInError(`The mail server did not sign you in: ${callback.searchParams.get("error_description") ?? error}`);
+    // Anyone can craft this link, so show only a code that looks like an OAuth error code.
+    const code = /^[a-z_]{1,40}$/.test(error) ? ` (${error})` : "";
+    throw new SignInError(`The mail server did not sign you in.${code}`);
   }
   const code = callback.searchParams.get("code");
   if (!pending || !code || callback.searchParams.get("state") !== pending.state) {
@@ -152,25 +157,28 @@ export async function completeSignIn(env: SessionEnvironment, callback: URL): Pr
   return pending.returnTo;
 }
 
-/** A new access token from the refresh token; false when the session cannot be renewed. */
-export async function refreshTokens(env: SessionEnvironment): Promise<boolean> {
+/** A new access token from the refresh token. Only the server's refusal ends the session. */
+export async function refreshTokens(env: SessionEnvironment): Promise<RefreshOutcome> {
   const current = readTokens(env.store);
-  if (!current?.refreshToken) return false;
+  if (!current?.refreshToken) return "ended";
+  let result: Awaited<ReturnType<typeof tokenRequest>>;
   try {
-    const { ok, answer } = await tokenRequest(env, {
+    result = await tokenRequest(env, {
       grant_type: "refresh_token",
       refresh_token: current.refreshToken,
       client_id: env.clientId,
     });
-    const tokens = ok ? tokensFrom(answer, env.now(), current.refreshToken) : null;
-    if (!tokens) {
-      clearTokens(env.store);
-      return false;
-    }
-    env.store.setItem(TOKENS_KEY, JSON.stringify(tokens));
-    return true;
   } catch {
-    // The server could not be reached; keep the tokens for the next try.
-    return false;
+    return "unavailable";
   }
+  const tokens = result.ok ? tokensFrom(result.answer, env.now(), current.refreshToken) : null;
+  if (tokens) {
+    env.store.setItem(TOKENS_KEY, JSON.stringify(tokens));
+    return "renewed";
+  }
+  if (result.status === 400 || result.status === 401) {
+    clearTokens(env.store);
+    return "ended";
+  }
+  return "unavailable";
 }
