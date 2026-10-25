@@ -16,6 +16,11 @@ operators sign in with their mail-server account. The console shows:
   - authentication and abuse problems.
 - **Overview**: 24-hour counts, per-agent activity and the latest errors.
 
+It also gives the server's own web admin the screens the community edition locks: the
+**Dashboard**, **Live Tracing** and the delivery **History**. The console collects their data, and
+a patched build of the web admin reads it from there; see
+[the web admin's Dashboard, Live Tracing and History](#the-web-admins-dashboard-live-tracing-and-history).
+
 It never writes to a mailbox. It uses only the server's open-source parts: the event webhook,
 the JMAP and OAuth endpoints, and the web-application hosting. It uses no Enterprise-only APIs.
 The design is in [`docs/design.md`](docs/design.md).
@@ -27,6 +32,8 @@ operator's browser ──▶ inWorkspace server: /console (the web app), /login 
 operator's browser ──bearer token──▶ console, api role ──▶ Postgres
                                        └── token introspection, JMAP read-only ──▶ inWorkspace server
 inWorkspace server ──event webhook (HMAC-signed)──▶ console, ingest role ──▶ Postgres
+inWorkspace server ──tracing webhook (HMAC-signed), metrics push (bearer token)──▶ console, ingest role
+server's web admin (/admin) ──administrator's token──▶ console, api role: dashboards, tracing, history
 ```
 
 The console has two parts.
@@ -47,15 +54,19 @@ The console has two parts.
   - Browsers call it from the server's origin, so it is publicly reachable. Every API request
     needs an operator's access token.
   - It reads mailboxes over JMAP, using a master-user login as each agent.
-- **ingest** accepts the server's signed event batches at `POST /api/ingest/events`, and stores
-  them in Postgres.
-  - It must be reachable from the mail server.
-  - It holds no JMAP credentials.
+- **ingest** accepts what the server sends, and stores it in Postgres:
+  - signed event batches at `POST /api/ingest/events`;
+  - signed tracing batches at `POST /api/ingest/traces`;
+  - the OpenTelemetry metrics push at `POST /api/ingest/metrics`.
+
+  It must be reachable from the mail server. It holds no JMAP credentials, except an optional
+  app password that can only count the delivery queue.
 
 `CONSOLE_ROLE=all` runs both roles in one process, for development.
 
 Message bodies are never stored. The console keeps only events (addresses, IPs and ids), for
-`EVENT_RETENTION_DAYS`.
+`EVENT_RETENTION_DAYS`. Traces, which are events too, are kept for `TRACE_RETENTION_DAYS`, and
+metrics for `METRIC_RETENTION_DAYS`.
 
 ## Configuration
 
@@ -65,7 +76,11 @@ Message bodies are never stored. The console keeps only events (addresses, IPs a
 | `DATABASE_URL` | both | Postgres connection string. |
 | `WEBHOOK_SIGNING_KEY` | ingest | Shared HMAC key, at least 32 characters; must match the server's webhook. |
 | `EVENT_RETENTION_DAYS` | ingest | Days to keep events; default 30. |
-| `JMAP_URL` | api | Origin of the inWorkspace server, such as `https://mail.example.com`. The web app runs on it. |
+| `METRICS_PUSH_TOKEN` | ingest | Bearer token of the server's metrics push, 32 to 256 characters. Without it, `/api/ingest/metrics` answers 404. |
+| `METRIC_RETENTION_DAYS` | ingest | Days to keep metrics; default 90, the dashboards' longest period. |
+| `TRACE_RETENTION_DAYS` | ingest | Days to keep traces; default 30. |
+| `QUEUE_READER_LOGIN`, `QUEUE_READER_SECRET` | ingest | Optional: the console principal's login and its queue reader app password (see [Server setup](#server-setup)). With them, every metrics push also records the delivery queue's size, which the community edition does not export. |
+| `JMAP_URL` | api, and ingest with a queue reader | Origin of the inWorkspace server, such as `https://mail.example.com`. The web app runs on it. |
 | `JMAP_PRINCIPAL` | api | Login of the console principal. |
 | `JMAP_PRINCIPAL_SECRET` | api | Its password. |
 | `AGENT_DOMAINS` | api | Comma-separated domains whose accounts are agent mailboxes. |
@@ -110,7 +125,8 @@ node scripts/server-setup.mjs
 ```
 
 **The principal**
-- It gets `impersonate`, plus read access to accounts and domains.
+- It gets `impersonate`, plus read access to accounts and domains, and `sysQueuedMessageQuery`
+  for its queue reader app password.
 - Impersonation gives full access to a mailbox, so the console enforces read-only access
   itself:
   - It only sends `Mailbox/get`, `Email/query`, `Email/get`, `Thread/get`, and the registry's
@@ -147,9 +163,45 @@ secret. Its only redirect URI is `<SERVER_URL>/console/oauth/callback`.
 > older 0.16 servers lack. Point it at the release your server already serves, for example
 > `https://github.com/stalwartlabs/webui/releases/download/v1.0.5/webui.zip`.
 
+**For the web admin's Dashboard, Live Tracing and History**, set these too:
+
+| Variable | What the script does |
+| --- | --- |
+| `TRACING_WEBHOOK_URL` | The ingest's `/api/ingest/traces`. Creates or updates the tracing webhook, signed with the same key. It subscribes to the event types in [`src/lib/trace-event-types.json`](src/lib/trace-event-types.json) that the server knows. |
+| `METRICS_PUSH_URL`, `METRICS_PUSH_TOKEN` | The ingest's `/api/ingest/metrics` and its token. Makes the server push its metrics there every minute (OpenTelemetry over HTTP). The Prometheus endpoint and the choice of metrics stay as they are. |
+| `QUEUE_READER_SECRET_FILE`, `QUEUE_READER_SECRET` | Signs in as the principal and makes it an app password that may only sign in and count the delivery queue. The server makes the secret and shows it once, so the script writes a new one to `QUEUE_READER_SECRET_FILE`, readable only by you, and never prints it. Give the ingest that secret as `QUEUE_READER_SECRET`, then delete the file. When `QUEUE_READER_SECRET` is set and still works, nothing changes. |
+
+The server's webhooks ignore their `level` setting and send exactly the events they list. So
+the tracing webhook lists its events: those at `info` level and above, plus the debug-level
+events that make a delivery trace readable. `scripts/generate-trace-events.mjs` makes that list
+from the server's event table.
+
 **Reload.** Finally, the script asks the server to reload its settings. Some server versions
 refuse the reload because of an unrelated setting. The script says so, and the webhook then
 becomes active at the next restart.
+
+## The web admin's Dashboard, Live Tracing and History
+
+On the community edition, the web admin locks the Dashboard, Observability → Live Tracing and
+Emails → History. Their data comes from Enterprise-only server code.
+
+The console collects the same data from what the community edition exports:
+- **Metrics.** The server's OpenTelemetry push. Counters become what each push added, gauges are
+  kept as pushed, and histograms as running totals that survive restarts.
+- **Queue size.** The queue reader counts it with each push.
+- **Traces.** The tracing webhook's events. Inbound SMTP sessions and outbound delivery
+  attempts are grouped into traces by span.
+
+The api role serves it in the Enterprise endpoints' shapes, under `/api/v1/insights/`:
+- metric history and current values;
+- `x:Trace/query` and `x:Trace/get` over JMAP;
+- a polled live event feed.
+
+Each route needs the permission the server itself would require.
+
+[`webadmin/`](webadmin) builds the server's web UI with patches that point those screens at this
+API. Its README covers the build, installing it at `/admin`, and rolling back to the stock web
+UI.
 
 ## Development
 
@@ -177,6 +229,7 @@ Vite proxies sign-in to the server and API calls to the console.
 | `npm test` | Unit tests for the service: configuration, signature, normalization, JMAP client, conversations, sanitizing, token verification, CORS, the API wrapper and the bundle. Also the web app's sign-in and its API client. |
 | `npm run test:integration` | The event store against a real Postgres; needs `TEST_DATABASE_URL`. |
 | `npm run e2e` | A real inWorkspace server and Postgres in Docker. It sends mail over SMTP and an agent reply over JMAP, checks the web app at `/console`, and signs in through the server's OAuth endpoints. Then it calls the API with valid, invalid and unauthorized tokens. |
+| `npm run e2e:insights` | The web admin's Dashboard, Live Tracing and History, against a real server in Docker (v0.16.13 by default, `E2E_STALWART_TAG` for another). It sets up the queue reader, the tracing webhook and the metrics push, and installs the patched web admin at `/admin`. Then it reads metrics, traces and the live feed as an administrator, and checks that an account without the permissions is refused. Builds the web admin first unless `WEBADMIN_ZIP` names one. |
 
 ## Deployment
 
@@ -201,7 +254,8 @@ The reference deployment is Google Cloud Run:
 - **Database**: Cloud SQL Postgres through the built-in connector:
   `DATABASE_URL=postgresql://<user>:<password>@/<database>?host=/cloudsql/<instance connection name>`.
 - **Secrets**: supply `DATABASE_URL`, `WEBHOOK_SIGNING_KEY` and `JMAP_PRINCIPAL_SECRET` from a
-  secret manager, never as plain environment values in source control.
+  secret manager, never as plain environment values in source control. So are
+  `METRICS_PUSH_TOKEN` and `QUEUE_READER_SECRET`.
 - **Health**: Cloud Run reserves paths ending in `z`, so `/healthz` does not reach the app
   there. Its default TCP startup probe is enough, because a bad configuration makes the
   server exit.
@@ -294,3 +348,10 @@ Logs are JSON lines.
     therefore loses at most an hour of events. The merged batch stays well under the size limit
     at typical agent-mail volumes.
   - Rejections are logged as `console.ingest.*` errors; alert on them.
+  - The metrics push must carry `METRICS_PUSH_TOKEN`, compared in constant time; bodies over 4 MB
+    are refused. Problems are logged as `console.metrics.*`, and tracing batches as
+    `console.traces.*`.
+  - The queue reader app password may only sign in and count the delivery queue.
+- **The patched web admin** sends the signed-in administrator's token to the console API named
+  on the server's own `/console/` page. That is the same trust as the console's own web app: the
+  api service sees administrators' tokens, so treat it like the server's administration.

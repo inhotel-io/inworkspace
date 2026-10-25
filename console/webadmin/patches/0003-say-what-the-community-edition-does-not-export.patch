@@ -1,0 +1,94 @@
+diff --git a/src/features/dashboard/components/DashboardChart.tsx b/src/features/dashboard/components/DashboardChart.tsx
+index 61e162c..e6795e0 100644
+--- a/src/features/dashboard/components/DashboardChart.tsx
++++ b/src/features/dashboard/components/DashboardChart.tsx
+@@ -65,6 +65,8 @@ import {
+   formatTimeTick,
+   formatValue,
+ } from '../helpers';
++import { allUnavailable, useInsightsStore } from '@/features/insights/insightsStore';
++import { NotCollected } from '@/features/insights/InsightsStatus';
+ 
+ interface DashboardChartProps {
+   chart: ChartSchema;
+@@ -74,6 +76,10 @@ interface DashboardChartProps {
+ }
+ 
+ export function DashboardChart({ chart, historySamples, historyWindow, period }: DashboardChartProps) {
++  // inWorkspace: some metrics are not exported by the community edition; say so instead of a flat line.
++  const notCollected = useInsightsStore((s) =>
++    allUnavailable(s.unavailable, chart.series.flatMap((series) => series.metrics)),
++  );
+   const { from, to } = historyWindow;
+   const bucketCount = getBucketCount(period);
+   const valueFormat = chart.valueFormat ?? 'number';
+@@ -245,7 +251,11 @@ export function DashboardChart({ chart, historySamples, historyWindow, period }:
+         </div>
+       </CardHeader>
+       <CardContent>
+-        <ChartSizedContainer height={288}>{(width, height) => renderChart(width, height)}</ChartSizedContainer>
++        {notCollected ? (
++          <NotCollected className="flex h-72 items-center justify-center text-sm text-muted-foreground" />
++        ) : (
++          <ChartSizedContainer height={288}>{(width, height) => renderChart(width, height)}</ChartSizedContainer>
++        )}
+       </CardContent>
+     </Card>
+   );
+diff --git a/src/features/dashboard/components/DashboardView.tsx b/src/features/dashboard/components/DashboardView.tsx
+index 421b881..587c033 100644
+--- a/src/features/dashboard/components/DashboardView.tsx
++++ b/src/features/dashboard/components/DashboardView.tsx
+@@ -17,6 +17,7 @@ import { collectHistoryMetricIds, collectLiveMetricIds, periodKey, periodWindow,
+ import { StatCard } from './StatCard';
+ import { DashboardChart } from './DashboardChart';
+ import { PeriodSelector } from './PeriodSelector';
++import { InsightsStatus } from '@/features/insights/InsightsStatus';
+ 
+ interface DashboardViewProps {
+   dashboardId: string;
+@@ -119,6 +120,9 @@ export function DashboardView({ dashboardId, section }: DashboardViewProps) {
+         <PeriodSelector onRefresh={handleRefresh} loading={isLoading} />
+       </div>
+ 
++      {/* inWorkspace: whether the inWorkspace Console can be reached, and whether metrics arrive. */}
++      <InsightsStatus />
++
+       {liveStatus === 'error' && liveError && (
+         <div className="flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+           <AlertCircle className="h-4 w-4 shrink-0" />
+diff --git a/src/features/dashboard/components/StatCard.tsx b/src/features/dashboard/components/StatCard.tsx
+index 529d41d..56427fd 100644
+--- a/src/features/dashboard/components/StatCard.tsx
++++ b/src/features/dashboard/components/StatCard.tsx
+@@ -16,6 +16,8 @@ import type { Metric } from '../types/metrics';
+ import { cardValue, formatValue, sparklineData, computeDelta } from '../helpers';
+ import { useLiveMetricsStore } from '../stores/liveMetricsStore';
+ import { getChartColor } from '@/components/ui/chart';
++import { allUnavailable, useInsightsStore } from '@/features/insights/insightsStore';
++import { NotCollected } from '@/features/insights/InsightsStatus';
+ 
+ const warnedIcons = new Set<string>();
+ 
+@@ -43,6 +45,8 @@ interface StatCardProps {
+ 
+ export function StatCard({ card, historySamples, historyWindow }: StatCardProps) {
+   const liveSnapshot = useLiveMetricsStore((s) => s.snapshot);
++  // inWorkspace: some metrics are not exported by the community edition; say so instead of showing 0.
++  const notCollected = useInsightsStore((s) => allUnavailable(s.unavailable, card.metrics));
+ 
+   const value = useMemo(() => {
+     if (card.source === 'live') {
+@@ -89,9 +93,10 @@ export function StatCard({ card, historySamples, historyWindow }: StatCardProps)
+           )}
+         </div>
+ 
+-        <div className="mt-2 text-2xl font-bold">{formattedValue}</div>
++        <div className="mt-2 text-2xl font-bold">{notCollected ? '\u2014' : formattedValue}</div>
++        {notCollected && <NotCollected />}
+ 
+-        {(delta || sparkline) && (
++        {!notCollected && (delta || sparkline) && (
+           <div className="mt-1 flex items-center gap-2">
+             {delta && (
+               <Badge variant="secondary" className="text-xs font-normal text-muted-foreground">

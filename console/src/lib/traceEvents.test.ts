@@ -39,12 +39,13 @@ describe("summarizeSpan", () => {
     });
   });
 
-  it("summarizes an outbound attempt", () => {
+  it("summarizes an outbound attempt from its first event, not the bounce queued in the same span", () => {
     const attempt = summarizeSpan("9", [
-      { type: "delivery.attempt-start", eventAt: at(0), data: { queueId: 5, from: "a@agents.example.test", to: ["jane@example.com"], size: 479 } },
-      { type: "delivery.mx-lookup", eventAt: at(1), data: { domain: "example.com" } },
+      { type: "delivery.attempt-start", eventAt: at(0), data: { queueId: 5, from: "a@agents.example.test", to: ["jane@example.com"], size: 344 } },
+      { type: "delivery.null-mx", eventAt: at(1), data: { domain: "example.com", to: ["jane@example.com"] } },
+      { type: "queue.dsn-queued", eventAt: at(1), data: { queueId: 6, from: "<>", to: ["a@agents.example.test"], size: 2547 } },
     ]);
-    expect(attempt).toMatchObject({ kind: "delivery.attempt-start", sender: "a@agents.example.test", recipients: ["jane@example.com"], size: 479, queueIds: ["5"] });
+    expect(attempt).toMatchObject({ kind: "delivery.attempt-start", sender: "a@agents.example.test", recipients: ["jane@example.com"], size: 344, queueIds: ["5"] });
   });
 
   it("is null for spans that are not deliveries", () => {

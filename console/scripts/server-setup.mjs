@@ -1,14 +1,27 @@
 #!/usr/bin/env node
-// Creates or updates the console principal and the event webhook on an inWorkspace server.
-// Idempotent; prints no secret. See console/README.md#server-setup.
-import { readFileSync } from "node:fs";
+// Creates or updates the console principal, its webhooks, the metrics push and the console's web
+// application on an inWorkspace server. Idempotent; prints no secret. See console/README.md#server-setup.
+import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const eventTypes = JSON.parse(readFileSync(new URL("../src/lib/event-types.json", import.meta.url), "utf8"));
+const traceEventTypes = JSON.parse(readFileSync(new URL("../src/lib/trace-event-types.json", import.meta.url), "utf8"));
+
+/** What the ingest's app password may do: sign in and count the delivery queue, nothing else. */
+const QUEUE_READER_PERMISSIONS = { "@type": "Replace", permissions: { authenticate: true, sysQueuedMessageQuery: true } };
+const QUEUE_READER_DESCRIPTION = "inWorkspace Console ingest: counts the delivery queue";
 
 const PRINCIPAL_PERMISSIONS = {
   "@type": "Merge",
-  enabledPermissions: { impersonate: true, sysAccountGet: true, sysAccountQuery: true, sysDomainGet: true, sysDomainQuery: true },
+  enabledPermissions: {
+    impersonate: true,
+    sysAccountGet: true,
+    sysAccountQuery: true,
+    sysDomainGet: true,
+    sysDomainQuery: true,
+    // Only for the queue reader's app password, which may hold no permission its account lacks.
+    sysQueuedMessageQuery: true,
+  },
   disabledPermissions: {},
 };
 
@@ -36,6 +49,13 @@ export class RegistryClient {
     const [[, result]] = await this.call([[name, args, "0"]]);
     return result;
   }
+
+  /** The server's admin schema, which names every event type it knows. */
+  async schema() {
+    const response = await fetch(`${this.baseUrl}/api/schema`, { headers: { Authorization: this.authorization } });
+    if (!response.ok) throw new Error(`the server's schema answered HTTP ${response.status}`);
+    return response.json();
+  }
 }
 
 function createdId(result, key, what) {
@@ -61,16 +81,16 @@ export async function ensureAccount(client, { address, description, secret, perm
     ["x:Account/get", { "#ids": { resultOf: "q", name: "x:Account/query", path: "/ids" }, properties: ["name"] }, "g"],
   ]);
   const existing = responses[1][1].list.find((account) => account.name.toLowerCase() === local);
-  const fields = {
-    description,
-    ...(secret ? { credentials: { 0: { "@type": "Password", secret } } } : {}),
-    ...(permissions ? { permissions } : {}),
-  };
+  const password = { "@type": "Password", secret };
+  const fields = { description, ...(permissions ? { permissions } : {}) };
   if (existing) {
-    assertUpdated(await client.one("x:Account/set", { update: { [existing.id]: fields } }), existing.id, address);
+    // Only the password, the first credential, is set: the account's app passwords stay.
+    const update = { ...fields, ...(secret ? { "credentials/0": password } : {}) };
+    assertUpdated(await client.one("x:Account/set", { update: { [existing.id]: update } }), existing.id, address);
     return { id: existing.id, created: false };
   }
-  const result = await client.one("x:Account/set", { create: { a: { "@type": "User", name: local, domainId: id, ...fields } } });
+  const created = { "@type": "User", name: local, domainId: id, ...fields, ...(secret ? { credentials: { 0: password } } : {}) };
+  const result = await client.one("x:Account/set", { create: { a: created } });
   return { id: createdId(result, "a", address), created: true };
 }
 
@@ -83,7 +103,51 @@ export function ensurePrincipal(client, { address, secret }) {
   });
 }
 
-export async function ensureWebhook(client, { url, signingKey }) {
+/** Whether an app password can count the queue: the one thing the ingest uses it for. */
+export async function canCountQueue(serverUrl, login, appPassword) {
+  const reader = new RegistryClient(serverUrl, login, appPassword);
+  try {
+    const result = await reader.one("x:QueuedMessage/query", { calculateTotal: true, limit: 1 });
+    return typeof result.total === "number";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The ingest's app password on the console principal: it may only sign in and count the delivery
+ * queue. The server makes the secret and shows it once, so an account creates its own app
+ * passwords: this signs in as the principal. `current` is the secret the ingest has now; when it
+ * still works, nothing changes and the result is null. Otherwise the old app passwords are
+ * removed, and the new secret is returned.
+ */
+export async function ensureQueueReader(serverUrl, { login, password, current }) {
+  if (current && (await canCountQueue(serverUrl, login, current))) return null;
+  const principal = new RegistryClient(serverUrl, login, password);
+  const responses = await principal.call([
+    ["x:AppPassword/query", {}, "q"],
+    ["x:AppPassword/get", { "#ids": { resultOf: "q", name: "x:AppPassword/query", path: "/ids" }, properties: ["description"] }, "g"],
+  ]);
+  const stale = responses[1][1].list.filter((app) => app.description === QUEUE_READER_DESCRIPTION).map((app) => app.id);
+  if (stale.length > 0) await principal.one("x:AppPassword/set", { destroy: stale });
+  const result = await principal.one("x:AppPassword/set", {
+    create: { r: { description: QUEUE_READER_DESCRIPTION, permissions: QUEUE_READER_PERMISSIONS } },
+  });
+  if (result.notCreated?.r) throw new Error(`could not create the queue reader's app password: ${JSON.stringify(result.notCreated.r)}`);
+  const secret = result.created?.r?.secret;
+  if (typeof secret !== "string" || !secret) throw new Error("the server did not return the new app password");
+  return secret;
+}
+
+/** The event types the server knows; a list made from a newer server may name some it does not. */
+export async function serverEventTypes(client) {
+  const schema = await client.schema();
+  const variants = schema?.enums?.EventType;
+  if (!Array.isArray(variants) || variants.length === 0) throw new Error("the server's schema lists no event types");
+  return new Set(variants.map((variant) => variant.name));
+}
+
+export async function ensureWebhook(client, { url, signingKey, events = eventTypes.subscribed }) {
   const responses = await client.call([
     ["x:WebHook/query", {}, "q"],
     ["x:WebHook/get", { "#ids": { resultOf: "q", name: "x:WebHook/query", path: "/ids" }, properties: ["url"] }, "g"],
@@ -96,7 +160,7 @@ export async function ensureWebhook(client, { url, signingKey }) {
     level: "info",
     lossy: false,
     eventsPolicy: "include",
-    events: Object.fromEntries(eventTypes.subscribed.map((type) => [type, true])),
+    events: Object.fromEntries(events.map((type) => [type, true])),
     throttle: 1000,
     timeout: 30000,
     discardAfter: 3600000,
@@ -107,6 +171,39 @@ export async function ensureWebhook(client, { url, signingKey }) {
   }
   const result = await client.one("x:WebHook/set", { create: { w: fields } });
   return { id: createdId(result, "w", "the webhook"), created: true };
+}
+
+/**
+ * The webhook for the web admin's Live Tracing and History: the events of trace-event-types.json
+ * that this server knows.
+ */
+export async function ensureTracingWebhook(client, { url, signingKey }) {
+  const known = await serverEventTypes(client);
+  const events = traceEventTypes.events.filter((type) => known.has(type));
+  const webhook = await ensureWebhook(client, { url, signingKey, events });
+  return { ...webhook, events: events.length, unknown: traceEventTypes.events.length - events.length };
+}
+
+/**
+ * Makes the server push its metrics (OpenTelemetry over HTTP) to the console every `intervalMs`.
+ * Only the push is set; the Prometheus endpoint and the choice of metrics stay as they are.
+ */
+export async function ensureMetricsPush(client, { endpoint, token, intervalMs = 60_000 }) {
+  const result = await client.one("x:Metrics/set", {
+    update: {
+      singleton: {
+        openTelemetry: {
+          "@type": "Http",
+          endpoint,
+          interval: intervalMs,
+          timeout: 10_000,
+          httpAuth: { "@type": "Bearer", bearerToken: { "@type": "Value", secret: token } },
+          httpHeaders: {},
+        },
+      },
+    },
+  });
+  assertUpdated(result, "singleton", "the metrics push");
 }
 
 /** Paths the server or its web admin already use. */
@@ -227,13 +324,44 @@ function required(name) {
 async function main() {
   const serverUrl = required("SERVER_URL").replace(/\/+$/, "");
   const client = new RegistryClient(serverUrl, required("SERVER_ADMIN_USER"), required("SERVER_ADMIN_SECRET"));
-  const principal = await ensurePrincipal(client, {
-    address: required("CONSOLE_PRINCIPAL"),
-    secret: required("CONSOLE_PRINCIPAL_SECRET"),
-  });
+  const principalLogin = required("CONSOLE_PRINCIPAL");
+  const principalSecret = required("CONSOLE_PRINCIPAL_SECRET");
+  const principal = await ensurePrincipal(client, { address: principalLogin, secret: principalSecret });
   console.log(`console principal ${principal.created ? "created" : "updated"} (id ${principal.id})`);
-  const webhook = await ensureWebhook(client, { url: required("WEBHOOK_URL"), signingKey: required("WEBHOOK_SIGNING_KEY") });
+
+  // The ingest's queue reader: a new secret is written to this file (only readable by you), never printed.
+  const secretFile = process.env.QUEUE_READER_SECRET_FILE?.trim();
+  if (secretFile) {
+    const fresh = await ensureQueueReader(serverUrl, {
+      login: principalLogin,
+      password: principalSecret,
+      current: process.env.QUEUE_READER_SECRET?.trim() || undefined,
+    });
+    if (fresh) {
+      writeFileSync(secretFile, fresh, { mode: 0o600 });
+      console.log(`queue reader: a new app password is in ${secretFile}; give it to the ingest as QUEUE_READER_SECRET, then delete the file`);
+    } else {
+      console.log("queue reader: the ingest's app password still works");
+    }
+  }
+  const signingKey = required("WEBHOOK_SIGNING_KEY");
+  const webhook = await ensureWebhook(client, { url: required("WEBHOOK_URL"), signingKey });
   console.log(`webhook ${webhook.created ? "created" : "updated"} (id ${webhook.id}, ${eventTypes.subscribed.length} event types)`);
+
+  // The web admin's Dashboard, Live Tracing and History (see webadmin/README.md).
+  const tracingUrl = process.env.TRACING_WEBHOOK_URL?.trim();
+  if (tracingUrl) {
+    const tracing = await ensureTracingWebhook(client, { url: tracingUrl, signingKey });
+    console.log(
+      `tracing webhook ${tracing.created ? "created" : "updated"} (id ${tracing.id}, ${tracing.events} event types` +
+        `${tracing.unknown ? `; ${tracing.unknown} this server does not know` : ""})`,
+    );
+  }
+  const metricsUrl = process.env.METRICS_PUSH_URL?.trim();
+  if (metricsUrl) {
+    await ensureMetricsPush(client, { endpoint: metricsUrl, token: required("METRICS_PUSH_TOKEN") });
+    console.log(`metrics push set to ${metricsUrl}, every minute`);
+  }
 
   const path = appPrefix(process.env.CONSOLE_PATH ?? "console");
   const clientId = process.env.OAUTH_CLIENT_ID?.trim() || "inworkspace-console";

@@ -553,3 +553,86 @@ setup script needs to run again only when the shell changes: its settings (the A
 client id or the time zone) or its page template. That needs one restart or Update apps.
 
 Organization-specific values never belong in this repository.
+
+## The web admin's Dashboard, Live Tracing and History
+
+Added in 0.3 (issue #10). On the community edition, the web admin locks three screens:
+- the Dashboard;
+- Observability → Live Tracing;
+- Emails → History.
+
+The screens themselves are open source (the web UI is `AGPL-3.0-only OR LicenseRef-SEL`). Their
+data comes from Enterprise-only server code:
+- `/api/live/metrics` and `/api/live/tracing`, two event streams;
+- the `x:Metric` and `x:Trace` objects, the stored history.
+
+The console replaces the data, not the screens.
+
+**Collecting the data.** Only what the community edition exports is used.
+- **Metrics: the OpenTelemetry push, not Prometheus.**
+  - The push comes from the server, like the event webhook, so nothing is opened on the server
+    and no scheduler polls it.
+  - Its metric names are the server's own ids, which the dashboards name.
+  - Counters and histograms arrive as cumulative values since the server started, and the
+    console stores what each push added. A different start time, or a value that went down,
+    means a restart.
+  - A series first seen long after its start becomes a baseline only, so enabling the push
+    does not show everything since the last restart as one spike.
+- **Histograms keep running totals.** The dashboards take the difference between consecutive
+  samples themselves.
+  - So the console keeps totals that only grow, even across restarts.
+  - When it merges samples into the about 360 steps a window shows, it keeps the first and last
+    total of each step, plus the last one before the window, so no increase is lost.
+- **The queue's size** is not in the community export. The ingest counts it with each push,
+  through an app password on the console principal that may only sign in and count the queue.
+  - The server makes app passwords and shows the secret once, and only to the account itself,
+    so the setup script signs in as the principal to make it.
+- **Traces come from a second webhook.** The server's webhooks ignore their level and send
+  exactly the events they list, so the list is generated from the server's event table:
+  - every event at `info` level or above;
+  - the debug-level events of SMTP sessions, delivery attempts and authentication results;
+  - no trace-level events.
+
+  An inbound trace is an SMTP session span, and an outbound trace a delivery attempt span. The
+  server's own `x:Trace` lists are keyed by the same two starting events.
+  - A trace's sender, recipients and size come from the events that describe the delivery: an
+    attempt's first event, or a session's envelope and the messages it queued.
+  - Messages the server makes along the way, such as a bounce, are not counted.
+- **Message ingest times** come from the `elapsed` value of `message-ingest.*` events, as a
+  derived histogram. The community export has no ingest histogram.
+- **Not available:** latencies for message indexing, DNS lookups, and the data and blob stores.
+  The API names them as unavailable, and the dashboards say so instead of showing zero.
+
+**Serving the data.** `/api/v1/insights/` answers in the Enterprise endpoints' shapes, so the web
+UI's own pages need only to be pointed at it.
+- `metrics` serves history and `metrics/live` current gauges.
+- `jmap` serves `x:Trace/query` and `x:Trace/get`, with the History lists' filters, both kinds of
+  paging and result references.
+- `tracing` serves events after a cursor.
+- **Polling, not streams.** Live Tracing polls every two seconds and live cards every 30.
+  - That needs no long-lived connections on Cloud Run.
+  - It carries the administrator's token in a header, like every other request.
+- **Permissions.** Each route needs the permission the server would require: `liveMetrics`,
+  `sysMetricQuery` and `sysMetricGet`, `liveTracing`, `sysTraceQuery` and `sysTraceGet`.
+  - The verifier returns the account's permissions, and each route checks its own.
+  - The console's own routes still need `OPERATOR_PERMISSION`.
+
+**The patched web admin** (`webadmin/`) is upstream web UI v1.0.5 with an overlay and four
+patches.
+- The three screens are no longer Enterprise features, and the trace lists are read-only.
+- The Dashboard's stores, Live Tracing and `x:Trace` calls go to the console. Everything else is
+  unchanged.
+- It finds the API on the console's page at `/console/`, so the build has no deployment settings
+  and can be a public release asset.
+- It links to its source, as the AGPL requires of a modified version used over a network.
+
+`scripts/webadmin.mjs` switches the server's `/admin` application to a build, or back to
+upstream's.
+- It checks the zip first.
+- If the server does not serve the new build after Update apps, it puts the previous one back.
+
+The alternatives were weighed and set aside:
+- **Running a fork of the server** that implements those endpoints would mean replacing the
+  production mail server, and re-implementing code whose Enterprise version sits next to it.
+- **Showing the screens in the console** instead would have meant a second place to look; the
+  web admin is where administrators already work.

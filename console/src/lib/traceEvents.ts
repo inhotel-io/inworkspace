@@ -58,6 +58,17 @@ function strings(value: unknown): string[] {
   return values.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
+/**
+ * The events that describe the delivery itself. A span also carries messages the server makes
+ * along the way, such as the bounce queued for a failed attempt, whose addresses and sizes are not
+ * this delivery's: an attempt is described by its first event, an SMTP session by its envelope and
+ * the messages it queued.
+ */
+function describes(root: SpanEvent, event: SpanEvent): boolean {
+  if (root.type === OUTBOUND_TRACE) return event === root;
+  return event.type === "smtp.mail-from" || event.type === "smtp.rcpt-to" || event.type === "queue.message-queued";
+}
+
 /** The trace a span's events make, or null when no event in them starts a delivery trace. */
 export function summarizeSpan(spanId: string, events: readonly SpanEvent[]): DeliveryTrace | null {
   const ordered = [...events].sort((a, b) => a.eventAt.getTime() - b.eventAt.getTime());
@@ -69,13 +80,16 @@ export function summarizeSpan(spanId: string, events: readonly SpanEvent[]): Del
   const words = new Set<string>();
   let size: number | null = null;
   let remoteIp: string | null = null;
-  for (const { data } of ordered) {
-    const from = strings(data.from)[0]?.toLowerCase();
-    if (from && sender === null) sender = from;
-    for (const to of strings(data.to)) recipients.add(to.toLowerCase());
-    const queueId = idOf(data.queueId);
-    if (queueId) queueIds.add(queueId);
-    if (typeof data.size === "number" && Number.isFinite(data.size)) size = Math.max(size ?? 0, data.size);
+  for (const event of ordered) {
+    const { data } = event;
+    if (describes(root, event)) {
+      const from = strings(data.from)[0]?.toLowerCase();
+      if (from && sender === null) sender = from;
+      for (const to of strings(data.to)) recipients.add(to.toLowerCase());
+      const queueId = idOf(data.queueId);
+      if (queueId) queueIds.add(queueId);
+      if (typeof data.size === "number" && Number.isFinite(data.size)) size = Math.max(size ?? 0, data.size);
+    }
     if (remoteIp === null && typeof data.remoteIp === "string") remoteIp = data.remoteIp;
     for (const key of ["domain", "hostname", "messageId", "mx"]) for (const word of strings(data[key])) words.add(word.toLowerCase());
   }

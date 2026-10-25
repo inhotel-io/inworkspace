@@ -72,7 +72,7 @@ describe("metric store", () => {
     ]);
   });
 
-  it("merges samples into steps: counters added, gauges averaged, histograms at their last total", async () => {
+  it("merges samples into steps: counters added, gauges averaged, histograms at their first and last total", async () => {
     await recordSamples(pool, (previous) => samplesFromPush(PUSH, previous));
     await recordSamples(pool, (previous) => samplesFromPush(later(20, 1), previous));
     await recordSamples(pool, (previous) => samplesFromPush(later(40, 3), previous));
@@ -84,7 +84,7 @@ describe("metric store", () => {
     });
     expect(history.filter((m) => m.metric === "smtp.connection-start").map((m) => m.count)).toEqual([4]);
     expect(history.filter((m) => m.metric === "user.count").map((m) => m.count)).toEqual([1]);
-    expect(history.filter((m) => m.metric === "http.request-time").map((m) => m.count)).toEqual([5]);
+    expect(history.filter((m) => m.metric === "http.request-time").map((m) => m.count)).toEqual([0, 5]);
   });
 
   it("adds each histogram's last sample before the window as a baseline", async () => {

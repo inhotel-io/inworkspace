@@ -100,8 +100,9 @@ export function resolutionFor(from: Date, to: Date): number {
 
 /**
  * Samples of the given metrics between `from` and `to`, merged into steps of `resolutionMs`:
- * counters added up, gauges averaged, histograms at their last total. Each histogram also gets its
- * last sample before the window, which the dashboards measure the first one against.
+ * counters added up, gauges averaged. Histograms keep the first and last total of each step, so the
+ * differences the dashboards take between consecutive samples still add up to every increase, and
+ * each also gets its last sample before the window, which the first one is measured against.
  */
 export async function metricHistory(
   pool: Pool,
@@ -123,9 +124,13 @@ export async function metricHistory(
        group by metric, kind, step
      ),
      histograms as (
-       select distinct on (metric, step) metric, kind, at, count, sum
-       from windowed where kind = 'histogram'
-       order by metric, step, at desc
+       select metric, kind, at, count, sum from (
+         select metric, kind, at, count, sum,
+                row_number() over (partition by metric, step order by at) as first_in_step,
+                row_number() over (partition by metric, step order by at desc) as last_in_step
+         from windowed where kind = 'histogram'
+       ) ranked
+       where first_in_step = 1 or last_in_step = 1
      ),
      baselines as (
        select distinct on (metric) metric, kind, at, count, sum

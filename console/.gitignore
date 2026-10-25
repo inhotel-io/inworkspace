@@ -45,3 +45,7 @@ next-env.d.ts
 
 # the built web app (npm run build:ui)
 /ui-dist/
+
+# the web admin build's working copy and zip (webadmin/build.mjs)
+/webadmin/work/
+/webadmin/*.zip
