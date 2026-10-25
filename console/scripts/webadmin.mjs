@@ -91,6 +91,12 @@ export async function switchWebadmin(
   const update = await updateApps(client);
   if (update.updated && (await waitForServing(serverUrl, bundle.scripts, fetchImpl, timeoutMs))) {
     log(`the web admin now serves ${url} (previously ${previous})`);
+    // Update apps downloaded the console's page again too, and the patched screens find the API on it.
+    const console_ = await fetchImpl(`${serverUrl}/console/`, { cache: "no-store" }).catch(() => null);
+    const page = console_?.ok ? await console_.text() : "";
+    if (!page.includes('name="inworkspace-console-api"')) {
+      log("warning: /console/ does not serve the console's page, so the Dashboard, Live Tracing and History cannot reach it; run Update apps again");
+    }
     return { switched: true, previous };
   }
   log(`the server did not serve the new build (${update.updated ? "timed out" : update.reason}); restoring ${previous}`);

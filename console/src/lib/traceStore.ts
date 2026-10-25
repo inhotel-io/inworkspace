@@ -4,6 +4,12 @@ import { toTraceEvent, type TraceEvent } from "./traceValues";
 
 const INSERT_CHUNK = 500;
 const COLUMNS = 5;
+/**
+ * Batches are stored one at a time, so event ids follow the order batches commit in: a live feed
+ * past a cursor never misses an event that commits later with a lower id. It also keeps two
+ * batches from regrouping the same span at once.
+ */
+const TRACE_LOCK = 7_302_027;
 
 export interface RejectedTraceRow {
   row: TraceRow;
@@ -73,6 +79,7 @@ export async function insertTraceEvents(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await client.query("select pg_advisory_xact_lock($1)", [TRACE_LOCK]);
     const inserted = new Set<string>();
     try {
       await client.query("savepoint batch");
@@ -153,7 +160,12 @@ export async function queryDeliveryTraces(
   const ordered = `select span_id, row_number() over (order by started_at ${direction}, span_id ${direction}) - 1 as pos
                    from delivery_traces where ${conditions.join(" and ")}`;
 
-  let position = Math.max(0, query.position);
+  let position = query.position;
+  if (position < 0 && query.anchor === undefined) {
+    const counted = await pool.query<{ total: string }>(`with ordered as (${ordered}) select count(*) as total from ordered`, values);
+    position = Number(counted.rows[0]!.total) + position;
+  }
+  position = Math.max(0, position);
   if (query.anchor !== undefined) {
     values.push(query.anchor);
     const { rows } = await pool.query<{ pos: string }>(`with ordered as (${ordered}) select pos from ordered where span_id = $${values.length}`, values);
@@ -248,7 +260,17 @@ export interface LiveQuery {
 
 const SCAN_LIMIT = 5000;
 
-/** Events after the cursor that match, oldest first, and the cursor to continue from. */
+interface FeedRow {
+  id: number;
+  type: string;
+  event_at: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Events after the cursor that match, oldest first, and the cursor to continue from. Each answer
+ * is one statement, so its events and its cursor come from the same snapshot.
+ */
 export async function liveTraceEvents(pool: Pool, query: LiveQuery): Promise<{ cursor: string; events: TraceEvent[] }> {
   const conditions: string[] = [];
   const values: unknown[] = [];
@@ -261,43 +283,48 @@ export async function liveTraceEvents(pool: Pool, query: LiveQuery): Promise<{ c
     conditions.push(condition);
   };
   for (const keyword of query.keywords) where("(type || ' ' || data::text) ilike ?", `%${escapeLike(keyword)}%`);
-  for (const [key, value] of query.filters) where("lower(data ->> ?) = lower(?)", key, value);
+  // A key matches its value, or one of its values when it holds a list, such as the recipients.
+  for (const [key, value] of query.filters) {
+    where(
+      `(lower(data ->> ?) = lower(?) or (jsonb_typeof(data -> ?) = 'array'
+         and exists (select 1 from jsonb_array_elements_text(data -> ?) as item(value) where lower(item.value) = lower(?))))`,
+      key,
+      value,
+      key,
+      key,
+      value,
+    );
+  }
   const matching = conditions.length > 0 ? `where ${conditions.join(" and ")}` : "";
   const limit = Math.min(Math.max(Math.trunc(query.limit), 1), 500);
 
+  const toEvents = (rows: FeedRow[]) => rows.map((row) => toTraceEvent(row.type, new Date(row.event_at), row.data));
+
   if (query.after === undefined) {
+    // Starting: the newest matching events since `since`, and a cursor after everything stored.
     values.push(query.since, limit);
-    const recent = await pool.query<{ id: string; type: string; event_at: Date; data: Record<string, unknown> }>(
-      `select id, type, event_at, data from (
-         select * from trace_events where event_at >= $${values.length - 1} order by id desc limit ${SCAN_LIMIT}
-       ) recent ${matching} order by id desc limit $${values.length}`,
+    const { rows } = await pool.query<{ newest: string | null; events: FeedRow[] }>(
+      `with recent as (select * from trace_events where event_at >= $${values.length - 1} order by id desc limit ${SCAN_LIMIT}),
+            matched as (select id, type, event_at, data from recent ${matching} order by id desc limit $${values.length})
+       select (select max(id)::text from trace_events) as newest,
+              coalesce((select json_agg(m order by m.id) from matched m), '[]'::json) as events`,
       values,
     );
-    const newest = await pool.query<{ id: string | null }>("select max(id)::text as id from trace_events");
-    return {
-      cursor: newest.rows[0]?.id ?? "0",
-      events: recent.rows.reverse().map((row) => toTraceEvent(row.type, row.event_at, row.data)),
-    };
+    return { cursor: rows[0]?.newest ?? "0", events: toEvents(rows[0]?.events ?? []) };
   }
 
   values.push(query.after, limit);
-  const { rows } = await pool.query<{ id: string; type: string; event_at: Date; data: Record<string, unknown> }>(
-    `with scanned as (select * from trace_events where id > $${values.length - 1} order by id limit ${SCAN_LIMIT})
-     select id::text, type, event_at, data from scanned ${matching} order by id limit $${values.length}`,
+  const { rows } = await pool.query<{ scanned: string | null; events: FeedRow[] }>(
+    `with scanned as (select * from trace_events where id > $${values.length - 1} order by id limit ${SCAN_LIMIT}),
+          matched as (select id, type, event_at, data from scanned ${matching} order by id limit $${values.length})
+     select (select max(id)::text from scanned) as scanned,
+            coalesce((select json_agg(m order by m.id) from matched m), '[]'::json) as events`,
     values,
   );
+  const events = rows[0]?.events ?? [];
   // A full page continues after its last event; otherwise after everything looked at.
-  let cursor = query.after;
-  if (rows.length === limit) {
-    cursor = rows.at(-1)!.id;
-  } else {
-    const scanned = await pool.query<{ id: string | null }>(
-      `select max(id)::text as id from (select id from trace_events where id > $1 order by id limit ${SCAN_LIMIT}) scanned`,
-      [query.after],
-    );
-    cursor = scanned.rows[0]?.id ?? query.after;
-  }
-  return { cursor, events: rows.map((row) => toTraceEvent(row.type, row.event_at, row.data)) };
+  const cursor = events.length === limit ? String(events.at(-1)!.id) : (rows[0]?.scanned ?? query.after);
+  return { cursor, events: toEvents(events) };
 }
 
 export async function pruneTraces(pool: Pool, retentionDays: number): Promise<number> {

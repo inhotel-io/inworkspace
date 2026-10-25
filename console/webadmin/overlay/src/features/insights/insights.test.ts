@@ -7,8 +7,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Schema } from '@/types/schema';
 import { isLinkEnterprise, isLinkVisible } from '@/lib/layout';
-import { apiUrlFromPage } from './consoleApi';
-import { followTraceFeed, TRACE_POLL_MS } from './feeds';
+import { apiUrlFromPage, ConsoleApiError } from './consoleApi';
+import { followTraceFeed, lastingFeedError, MAX_FAILURES, TRACE_POLL_MS } from './feeds';
 import { allUnavailable } from './insightsStore';
 import { isReplicatedView, isTraceRequest } from './replicated';
 
@@ -119,12 +119,48 @@ describe('followTraceFeed', () => {
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
-  it('stops and reports when a poll fails', async () => {
-    vi.mocked(fetchLiveTracing).mockRejectedValue(new Error('HTTP 503'));
+  it('rides out failures that may pass, keeping its place, and reports them only when they persist', async () => {
+    const event = { event: 'smtp.ehlo', timestamp: '2026-10-26T09:00:00Z', keyValues: [] };
+    vi.mocked(fetchLiveTracing)
+      .mockResolvedValueOnce({ cursor: '5', events: [event] })
+      .mockRejectedValueOnce(new ConsoleApiError(503, 'unavailable'))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce({ cursor: '6', events: [event] });
+    const onData = vi.fn();
+    const onError = vi.fn();
+    const feed = followTraceFeed('', [], { onData, onOpen: vi.fn(), onError });
+    await vi.advanceTimersByTimeAsync(60_000);
+    feed.close();
+    expect(vi.mocked(fetchLiveTracing).mock.calls.slice(0, 4).map(([cursor]) => cursor)).toEqual([null, '5', '5', '5']);
+    expect(onData).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+
+    vi.mocked(fetchLiveTracing).mockReset().mockRejectedValue(new ConsoleApiError(502, 'bad gateway'));
+    const failing = vi.fn();
+    followTraceFeed('', [], { onData: vi.fn(), onOpen: vi.fn(), onError: failing });
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(failing).toHaveBeenCalledOnce();
+    expect(fetchLiveTracing).toHaveBeenCalledTimes(MAX_FAILURES);
+  });
+
+  it('reports a refusal at once, with its reason', async () => {
+    vi.mocked(fetchLiveTracing).mockRejectedValue(new ConsoleApiError(403, 'admin does not have the liveTracing permission'));
     const onError = vi.fn();
     followTraceFeed('', [], { onData: vi.fn(), onOpen: vi.fn(), onError });
     await vi.advanceTimersByTimeAsync(TRACE_POLL_MS * 3);
     expect(onError).toHaveBeenCalledOnce();
     expect(fetchLiveTracing).toHaveBeenCalledOnce();
+    expect(lastingFeedError(onError.mock.calls[0]![0])).toBe('admin does not have the liveTracing permission');
+    expect(lastingFeedError(new TypeError('fetch failed'))).toBeNull();
+  });
+
+  it('continues from the position an earlier feed reached', async () => {
+    vi.mocked(fetchLiveTracing).mockResolvedValue({ cursor: '9', events: [] });
+    const position = { cursor: '7' };
+    const feed = followTraceFeed('', [], { onData: vi.fn(), onOpen: vi.fn(), onError: vi.fn() }, position);
+    await vi.advanceTimersByTimeAsync(0);
+    feed.close();
+    expect(fetchLiveTracing).toHaveBeenCalledWith('7', '', []);
+    expect(position.cursor).toBe('9');
   });
 });

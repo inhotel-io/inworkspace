@@ -22,15 +22,16 @@ unchanged.
 
 | Screen | In this build |
 | --- | --- |
-| Dashboard | All six boards. Live cards are refreshed every 30 seconds; history covers 24 hours to 90 days. The community edition exports no latencies for message indexing, DNS lookups, or the data and blob stores, and those cards say so. Message ingest time is measured from the server's `message-ingest.*` events instead. |
+| Dashboard | All six boards. Live cards are refreshed every 30 seconds; history covers 24 hours to 90 days. The community edition exports no latencies for ingesting and indexing messages or for DNS lookups. The console measures them from the same events the server's own histograms observe. Data and blob store latencies would take every store read and write as an event, so those four cards say they are not exported. |
 | Live Tracing | The server's events a few seconds after they happen, with the same keyword and key filters, polled every two seconds. It shows the events the tracing webhook carries: everything at `info` level and above, plus the debug-level events of SMTP sessions and delivery attempts. Trace-level protocol lines are not included. |
 | History | Inbound SMTP sessions and outbound delivery attempts, each with its event timeline, for as long as the console keeps traces (30 days by default). The lists are read-only. |
 
 Who may open each screen is decided by the same server permissions as on the Enterprise edition.
+When the console's `ALLOWED_ACCOUNTS` is set, it also limits who can use these three screens.
 
 | Screen | Permissions |
 | --- | --- |
-| Dashboard | `liveMetrics`, plus `sysMetricQuery` and `sysMetricGet` for its history |
+| Dashboard | `liveMetrics` and `sysTraceGet` for the menu entry, as upstream; `sysMetricQuery` and `sysMetricGet` for its history |
 | Live Tracing | `liveTracing` |
 | History | `sysTraceQuery` and `sysTraceGet` |
 
@@ -68,7 +69,7 @@ the commit.
 From the `console` directory, after `npm ci`:
 
 ```bash
-node webadmin/build.mjs --out webui.zip --source-url https://github.com/<owner>/<repo>/tree/<tag>/console/webadmin
+node webadmin/build.mjs --out webui.zip
 ```
 
 The build does these steps:
@@ -78,8 +79,10 @@ The build does these steps:
    that `upstream.json` names. `--local` uses this machine's npm instead;
 4. zips `dist/` the way upstream's release asset is laid out.
 
-The same sources always give the same zip. `--source-url` is the link the sidebar shows: point
-it at the exact commit or tag the zip was built from.
+The same sources always give the same zip.
+- **The source link.** The sidebar links to this directory at the commit the zip was built from,
+  on this checkout's GitHub remote, so build from a pushed commit.
+- `--source-url` sets the link instead, for example to a tag.
 
 Publish the zip somewhere the mail server can download over https, such as a release asset of
 this repository.

@@ -209,6 +209,7 @@ describe("trace store", () => {
     expect(await queryDeliveryTraces(pool, { ...QUERY, position: 1, limit: 1 })).toEqual({ ids: ["22"], position: 1, total: 3 });
     expect(await queryDeliveryTraces(pool, { ...QUERY, anchor: "22", anchorOffset: 1 })).toEqual({ ids: ["21"], position: 2, total: 3 });
     expect(await queryDeliveryTraces(pool, { ...QUERY, position: 9 })).toEqual({ ids: [], position: 9, total: 3 });
+    expect(await queryDeliveryTraces(pool, { ...QUERY, position: -1 })).toEqual({ ids: ["21"], position: 2, total: 3 });
     await expect(queryDeliveryTraces(pool, { ...QUERY, anchor: "99" })).rejects.toBeInstanceOf(AnchorNotFoundError);
   });
 
@@ -225,6 +226,8 @@ describe("trace store", () => {
     expect(filtered.cursor).toBe("8");
     const byKey = await liveTraceEvents(pool, { after: "0", keywords: [], filters: [["queueId", "1102"]], since: new Date(0), limit: 100 });
     expect(byKey.events).toHaveLength(1);
+    const byListedValue = await liveTraceEvents(pool, { after: "0", keywords: [], filters: [["to", "B@agents.example.test"]], since: new Date(0), limit: 100 });
+    expect(byListedValue.events.map((e) => e.event)).toEqual(["smtp.rcpt-to", "queue.message-queued"]);
     const paged = await liveTraceEvents(pool, { after: "0", keywords: [], filters: [], since: new Date(0), limit: 3 });
     expect(paged.cursor).toBe("3");
     const resumed = await liveTraceEvents(pool, { keywords: [], filters: [], since: new Date(Date.UTC(2026, 9, 26, 9, 0, 6)), limit: 100 });

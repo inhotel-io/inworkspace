@@ -47,6 +47,7 @@ const adminSecret = process.env.E2E_ADMIN_SECRET || secret();
 const principalSecret = secret();
 const runtimeSecret = secret();
 const viewerSecret = secret();
+const watcherSecret = secret();
 const signingKey = secret();
 const pushToken = secret();
 
@@ -159,8 +160,14 @@ try {
     permissions: { "@type": "Merge", enabledPermissions: { impersonate: true }, disabledPermissions: {} },
   });
   await ensureAccount(admin, { address: `viewer@${DOMAIN}`, description: "Plain user", secret: viewerSecret });
+  await ensureAccount(admin, {
+    address: `watcher@${DOMAIN}`,
+    description: "May watch the live dashboards only",
+    secret: watcherSecret,
+    permissions: { "@type": "Merge", enabledPermissions: { liveMetrics: true }, disabledPermissions: {} },
+  });
   await ensurePrincipal(admin, { address: `console@${DOMAIN}`, secret: principalSecret });
-  const queueReaderSecret = await ensureQueueReader(SERVER, { login: `console@${DOMAIN}`, password: principalSecret });
+  let queueReaderSecret = await ensureQueueReader(SERVER, { login: `console@${DOMAIN}`, password: principalSecret });
   expect(typeof queueReaderSecret === "string", "the principal made the ingest an app password");
   await ensurePrincipal(admin, { address: `console@${DOMAIN}`, secret: principalSecret });
   expect(await canCountQueue(SERVER, `console@${DOMAIN}`, queueReaderSecret), "running the setup again keeps it");
@@ -168,6 +175,12 @@ try {
     (await ensureQueueReader(SERVER, { login: `console@${DOMAIN}`, password: principalSecret, current: queueReaderSecret })) === null,
     "and does not replace it while it works",
   );
+  const replaced = await ensureQueueReader(SERVER, { login: `console@${DOMAIN}`, password: principalSecret, current: "app-not-a-real-one" });
+  expect(
+    typeof replaced === "string" && !(await canCountQueue(SERVER, `console@${DOMAIN}`, queueReaderSecret)),
+    "a secret the server refuses is replaced, and the old app password removed",
+  );
+  queueReaderSecret = replaced;
   await ensureWebhook(admin, { url: `${FROM_SERVER(PORT)}/api/ingest/events`, signingKey });
   const tracing = await ensureTracingWebhook(admin, { url: `${FROM_SERVER(PORT)}/api/ingest/traces`, signingKey });
   expect(tracing.events > 300 && tracing.unknown < 20, `the tracing webhook lists ${tracing.events} event types (${tracing.unknown} unknown to ${SERVER_TAG})`);
@@ -325,12 +338,16 @@ try {
   const next = await insights(`tracing?after=${feed.body.cursor}&filter=nothing-matches-this`, adminToken);
   expect(next.status === 200 && next.body.events.length === 0, "and continues from its cursor");
 
-  step("Refusing an account without the permissions");
+  step("Refusing accounts without the permissions");
   const viewerToken = await signIn(`viewer@${DOMAIN}`, viewerSecret);
-  expect((await insights("metrics/live?metric=server.memory", viewerToken)).status === 403, "live metrics need liveMetrics");
-  expect((await insights("tracing", viewerToken)).status === 403, "live tracing needs liveTracing");
-  const { body: forbidden } = await traceJmap(viewerToken, [["x:Trace/query", {}, "0"]]);
-  expect(forbidden.methodResponses[0][1].type === "forbidden", "trace queries need sysTraceQuery");
+  const plain = await insights("metrics/live?metric=server.memory", viewerToken);
+  expect(plain.status === 403 && /none of the permissions/.test(plain.body.error.message), "an account with none of the console's permissions is refused");
+  expect((await traceJmap(viewerToken, [["x:Trace/query", {}, "0"]])).status === 403, "including for trace queries");
+  const watcherToken = await signIn(`watcher@${DOMAIN}`, watcherSecret);
+  expect((await insights("metrics/live?metric=server.memory", watcherToken)).status === 200, "an account with liveMetrics may read live metrics");
+  expect((await insights("tracing", watcherToken)).status === 403, "but live tracing needs liveTracing");
+  const { body: forbidden } = await traceJmap(watcherToken, [["x:Trace/query", {}, "0"]]);
+  expect(forbidden.methodResponses[0][1].type === "forbidden", "and trace queries need sysTraceQuery");
 
   console.log(`\n✓ insights end-to-end run passed against ${SERVER_TAG}`);
   if (keep) {

@@ -26,7 +26,16 @@ if (!out) {
   console.error("usage: node webadmin/build.mjs --out webui.zip [--source-url <url>] [--local] [--keep]");
   process.exit(2);
 }
-const sourceUrl = option("--source-url") ?? "https://github.com/inhotel-io/inworkspace/tree/main/console/webadmin";
+/** The source this build is made from: this checkout's commit on its GitHub remote. */
+function defaultSourceUrl() {
+  const git = (...args) => execFileSync("git", ["-C", here, ...args], { encoding: "utf8" }).trim();
+  const remote = git("remote", "get-url", "origin").replace(/^git@github\.com:/, "https://github.com/").replace(/\.git$/, "");
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+$/.test(remote)) throw new Error(`cannot link the source on ${remote}; pass --source-url`);
+  if (git("status", "--porcelain", "--", ".") !== "") console.warn("warning: webadmin/ has uncommitted changes, which the source link does not show");
+  const prefix = git("rev-parse", "--show-prefix");
+  return `${remote}/tree/${git("rev-parse", "HEAD")}/${prefix}`.replace(/\/$/, "");
+}
+const sourceUrl = option("--source-url") ?? defaultSourceUrl();
 const local = process.argv.includes("--local");
 const keep = process.argv.includes("--keep");
 const work = path.join(here, "work");

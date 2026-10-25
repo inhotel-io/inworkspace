@@ -39,6 +39,11 @@ export interface VerifierOptions {
   serverUrl: string;
   /** The console principal, which introspects tokens. */
   principal: { username: string; password: string };
+  /**
+   * An account needs at least one of these to use the console at all; each route then checks its
+   * own. Others are refused here, so they never count as sessions that passed.
+   */
+  acceptedPermissions: readonly string[];
   allowedAccounts: readonly string[];
   /** The client a request comes from, for its own introspection budget; null when unknown. */
   clientOf?: (headers: Headers) => string | null;
@@ -133,7 +138,8 @@ type Outcome = { operator: Operator } | { refusal: AuthError };
  * - The server reports every unexpired token it issued as active, refresh tokens included. So a
  *   token that lives longer than an access token can is refused here, unchecked.
  * - An access token is then used to read the account's permissions and login, one request at a time.
- *   Which permissions a request needs is up to its route (see requirePermissions).
+ *   An account with none of `acceptedPermissions` is refused; which permissions a request needs is
+ *   then up to its route (see requirePermissions).
  * - Each token is checked once at a time, and the answer, yes or no, is remembered for a minute.
  */
 export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
@@ -276,6 +282,9 @@ export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
       return refused(403, `${login} is not allowed to use the console`);
     }
     const granted = new Set(permissions.filter((permission): permission is string => typeof permission === "string"));
+    if (!options.acceptedPermissions.some((permission) => granted.has(permission))) {
+      return refused(403, `${login} has none of the permissions the console needs`);
+    }
     rememberPassed(key, state.exp * 1000, at);
     return remember(key, { operator: { login, permissions: granted } }, Math.min(at + cacheMs, state.exp * 1000));
   }

@@ -94,6 +94,7 @@ function verifierFor(
   return createTokenVerifier({
     serverUrl: SERVER,
     principal: PRINCIPAL,
+    acceptedPermissions: ["impersonate", "liveMetrics"],
     allowedAccounts: extra.allowedAccounts ?? [],
     introspectionsPerMinute: extra.perMinute,
     introspectionsPerClientPerMinute: extra.perClientPerMinute,
@@ -201,6 +202,19 @@ describe("createTokenVerifier", () => {
       expect.objectContaining({ status: 403, message: "jane@example.com does not have the impersonate permission" }),
     );
     expect(() => requirePermissions(LOCAL_OPERATOR, ["impersonate"])).not.toThrow();
+  });
+
+  it("refuses an account with none of the console's permissions, and never exempts it from the budget", async () => {
+    const server = fakeServer({ permissions: ["authenticate"], username: "jane@example.com" });
+    const clock = { now: NOW };
+    const verify = verifierFor(server, clock, { perMinute: 1, perClientPerMinute: 5 });
+    const refusal = { status: 403, message: "jane@example.com has none of the permissions the console needs" };
+    await expect(verify(bearer(TOKEN, "203.0.113.9"))).rejects.toMatchObject(refusal);
+    await expect(verify(bearer(TOKEN, "203.0.113.9"))).rejects.toMatchObject(refusal);
+    expect(server.calls).toHaveLength(3);
+    clock.now += 61_000;
+    await expect(verify(bearer("sw1.another-token-xxxx", "203.0.113.9"))).rejects.toMatchObject({ status: 403 });
+    await expect(verify(bearer(TOKEN, "203.0.113.9"))).rejects.toBeInstanceOf(RateLimitError);
   });
 
   it("applies the allow-list when one is set", async () => {

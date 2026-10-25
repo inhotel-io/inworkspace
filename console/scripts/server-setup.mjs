@@ -78,14 +78,16 @@ export async function ensureAccount(client, { address, description, secret, perm
   if (!id) throw new Error(`the domain ${domain} does not exist on the server`);
   const responses = await client.call([
     ["x:Account/query", { filter: { domainId: id } }, "q"],
-    ["x:Account/get", { "#ids": { resultOf: "q", name: "x:Account/query", path: "/ids" }, properties: ["name"] }, "g"],
+    ["x:Account/get", { "#ids": { resultOf: "q", name: "x:Account/query", path: "/ids" }, properties: ["name", "credentials"] }, "g"],
   ]);
   const existing = responses[1][1].list.find((account) => account.name.toLowerCase() === local);
   const password = { "@type": "Password", secret };
   const fields = { description, ...(permissions ? { permissions } : {}) };
   if (existing) {
-    // Only the password, the first credential, is set: the account's app passwords stay.
-    const update = { ...fields, ...(secret ? { "credentials/0": password } : {}) };
+    // Only the password credential is set, so the account's app passwords and API keys stay.
+    const credentials = Object.entries(existing.credentials ?? {});
+    const slot = credentials.find(([, credential]) => credential?.["@type"] === "Password")?.[0] ?? String(credentials.length);
+    const update = { ...fields, ...(secret ? { [`credentials/${slot}`]: password } : {}) };
     assertUpdated(await client.one("x:Account/set", { update: { [existing.id]: update } }), existing.id, address);
     return { id: existing.id, created: false };
   }
@@ -103,26 +105,49 @@ export function ensurePrincipal(client, { address, secret }) {
   });
 }
 
-/** Whether an app password can count the queue: the one thing the ingest uses it for. */
-export async function canCountQueue(serverUrl, login, appPassword) {
-  const reader = new RegistryClient(serverUrl, login, appPassword);
+/**
+ * Whether an app password can count the queue, the one thing the ingest uses it for: "works",
+ * "refused" when the server turns it away, or "unknown" when the server could not be asked.
+ */
+export async function queueReaderState(serverUrl, login, appPassword) {
+  let response;
   try {
-    const result = await reader.one("x:QueuedMessage/query", { calculateTotal: true, limit: 1 });
-    return typeof result.total === "number";
+    response = await fetch(`${serverUrl.replace(/\/+$/, "")}/jmap/`, {
+      method: "POST",
+      headers: { Authorization: `Basic ${Buffer.from(`${login}:${appPassword}`).toString("base64")}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        using: ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"],
+        methodCalls: [["x:QueuedMessage/query", { calculateTotal: true, limit: 1 }, "0"]],
+      }),
+    });
   } catch {
-    return false;
+    return "unknown";
   }
+  if (response.status === 401 || response.status === 403) return "refused";
+  if (!response.ok) return "unknown";
+  const [name, result] = (await response.json().catch(() => null))?.methodResponses?.[0] ?? [];
+  if (name === "x:QueuedMessage/query" && typeof result?.total === "number") return "works";
+  return name === "error" && result?.type === "forbidden" ? "refused" : "unknown";
+}
+
+export async function canCountQueue(serverUrl, login, appPassword) {
+  return (await queueReaderState(serverUrl, login, appPassword)) === "works";
 }
 
 /**
  * The ingest's app password on the console principal: it may only sign in and count the delivery
  * queue. The server makes the secret and shows it once, so an account creates its own app
  * passwords: this signs in as the principal. `current` is the secret the ingest has now; when it
- * still works, nothing changes and the result is null. Otherwise the old app passwords are
- * removed, and the new secret is returned.
+ * still works, nothing changes and the result is null. Only when the server refuses it (or there
+ * is none) are the old app passwords removed and a new secret returned: a failure to ask changes
+ * nothing.
  */
 export async function ensureQueueReader(serverUrl, { login, password, current }) {
-  if (current && (await canCountQueue(serverUrl, login, current))) return null;
+  if (current) {
+    const state = await queueReaderState(serverUrl, login, current);
+    if (state === "works") return null;
+    if (state === "unknown") throw new Error("could not check the queue reader's app password; it was left as it is");
+  }
   const principal = new RegistryClient(serverUrl, login, password);
   const responses = await principal.call([
     ["x:AppPassword/query", {}, "q"],
@@ -188,7 +213,12 @@ export async function ensureTracingWebhook(client, { url, signingKey }) {
  * Makes the server push its metrics (OpenTelemetry over HTTP) to the console every `intervalMs`.
  * Only the push is set; the Prometheus endpoint and the choice of metrics stay as they are.
  */
-export async function ensureMetricsPush(client, { endpoint, token, intervalMs = 60_000 }) {
+export async function ensureMetricsPush(client, { endpoint, token, intervalMs = 60_000, replace = false }) {
+  const [current] = (await client.one("x:Metrics/get", { ids: ["singleton"] })).list ?? [];
+  const push = current?.openTelemetry;
+  if (push && push["@type"] !== "Disabled" && push.endpoint !== endpoint && !replace) {
+    throw new Error(`the server already pushes its metrics to ${push.endpoint}; set METRICS_PUSH_REPLACE=1 to replace that`);
+  }
   const result = await client.one("x:Metrics/set", {
     update: {
       singleton: {
@@ -338,7 +368,8 @@ async function main() {
       current: process.env.QUEUE_READER_SECRET?.trim() || undefined,
     });
     if (fresh) {
-      writeFileSync(secretFile, fresh, { mode: 0o600 });
+      // "wx": a new file, created readable only by you, never one that already exists.
+      writeFileSync(secretFile, fresh, { mode: 0o600, flag: "wx" });
       console.log(`queue reader: a new app password is in ${secretFile}; give it to the ingest as QUEUE_READER_SECRET, then delete the file`);
     } else {
       console.log("queue reader: the ingest's app password still works");
@@ -359,7 +390,11 @@ async function main() {
   }
   const metricsUrl = process.env.METRICS_PUSH_URL?.trim();
   if (metricsUrl) {
-    await ensureMetricsPush(client, { endpoint: metricsUrl, token: required("METRICS_PUSH_TOKEN") });
+    await ensureMetricsPush(client, {
+      endpoint: metricsUrl,
+      token: required("METRICS_PUSH_TOKEN"),
+      replace: process.env.METRICS_PUSH_REPLACE === "1",
+    });
     console.log(`metrics push set to ${metricsUrl}, every minute`);
   }
 

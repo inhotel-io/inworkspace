@@ -107,9 +107,38 @@ export function summarizeSpan(spanId: string, events: readonly SpanEvent[]): Del
   };
 }
 
-/** Message ingest times from `message-ingest.*` events, which the community edition does not export. */
-export function ingestTimes(rows: readonly TraceRow[]): { at: Date; value: number }[] {
-  return rows
-    .filter((row) => (row.type === "message-ingest.ham" || row.type === "message-ingest.spam") && typeof row.data.elapsed === "number")
-    .map((row) => ({ at: row.eventAt, value: row.data.elapsed as number }));
+/**
+ * Latencies the community edition does not export, measured from the same events the server's own
+ * histograms observe (`Collector::record_metric`): the `elapsed` of each.
+ */
+const DERIVED_TIMES: readonly { metric: string; observes: (type: string) => boolean; positiveOnly: boolean }[] = [
+  {
+    metric: "message-ingest.time",
+    observes: (type) => ["message-ingest.ham", "message-ingest.spam", "message-ingest.imap-append", "message-ingest.jmap-append"].includes(type),
+    positiveOnly: false,
+  },
+  { metric: "message-ingest.index-time", observes: (type) => type === "message-ingest.search-index", positiveOnly: false },
+  {
+    metric: "dns.lookup-time",
+    observes: (type) => ["delivery.mx-lookup", "delivery.ip-lookup", "delivery.null-mx"].includes(type) || /^(?:tls-rpt|mta-sts|dane)\./.test(type),
+    positiveOnly: true,
+  },
+];
+
+export const DERIVED_METRICS: readonly string[] = DERIVED_TIMES.map((derived) => derived.metric);
+
+/** Each derived latency's observations in these rows, by metric. */
+export function derivedTimes(rows: readonly TraceRow[]): Map<string, { at: Date; value: number }[]> {
+  const observations = new Map<string, { at: Date; value: number }[]>();
+  for (const row of rows) {
+    const elapsed = row.data.elapsed;
+    if (typeof elapsed !== "number" || !Number.isFinite(elapsed) || elapsed < 0) continue;
+    for (const derived of DERIVED_TIMES) {
+      if (!derived.observes(row.type) || (derived.positiveOnly && elapsed === 0)) continue;
+      const list = observations.get(derived.metric) ?? [];
+      list.push({ at: row.eventAt, value: elapsed });
+      observations.set(derived.metric, list);
+    }
+  }
+  return observations;
 }

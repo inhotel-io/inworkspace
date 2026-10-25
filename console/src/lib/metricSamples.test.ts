@@ -42,6 +42,20 @@ describe("samplesFromPush", () => {
     expect(second.samples).toEqual([{ metric: "auth.failed", kind: "counter", at: date(seconds + 60), count: 7, sum: null }]);
   });
 
+  it("counts all of a series that first appears on a server run the console already knows", () => {
+    const seconds = FRESH_SERIES_MS / 1000 + 600;
+    const first = samplesFromPush([counter("auth.failed", 500, seconds)], new Map());
+    const next = samplesFromPush(
+      [counter("auth.failed", 500, seconds + 60), counter("security.ip-blocked", 2, seconds + 60), histogram("dns.lookup-time", 3, 90, seconds + 60)],
+      stateOf(first.states),
+    );
+    expect(next.samples).toEqual([
+      { metric: "security.ip-blocked", kind: "counter", at: date(seconds + 60), count: 2, sum: null },
+      { metric: "dns.lookup-time", kind: "histogram", at: new Date(date(seconds + 60).getTime() - 1), count: 0, sum: 0 },
+      { metric: "dns.lookup-time", kind: "histogram", at: date(seconds + 60), count: 3, sum: 90 },
+    ]);
+  });
+
   it("records nothing for a counter that did not move", () => {
     const first = samplesFromPush([counter("queue.message-queued", 4, 30)], new Map());
     expect(samplesFromPush([counter("queue.message-queued", 4, 90)], stateOf(first.states)).samples).toEqual([]);
@@ -73,7 +87,7 @@ describe("samplesFromPush", () => {
   it("keeps histogram totals that only grow, with a baseline before the first sample", () => {
     const first = samplesFromPush([histogram("delivery.total-time", 2, 300, 30)], new Map());
     expect(first.samples).toEqual([
-      { metric: "delivery.total-time", kind: "histogram", at: date(0), count: 0, sum: 0 },
+      { metric: "delivery.total-time", kind: "histogram", at: new Date(date(30).getTime() - 1), count: 0, sum: 0 },
       { metric: "delivery.total-time", kind: "histogram", at: date(30), count: 2, sum: 300 },
     ]);
     const second = samplesFromPush([histogram("delivery.total-time", 5, 900, 90)], stateOf(first.states));

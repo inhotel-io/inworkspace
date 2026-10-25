@@ -155,6 +155,16 @@ describe("handleTraceJmap", () => {
     expect(methodResponses[0]![1]).toMatchObject({ limit: 500 });
   });
 
+  it("treats after an instant as strictly after it, and takes negative positions", async () => {
+    const { store, queries } = storeWith();
+    await handleTraceJmap(
+      request(["x:Trace/query", { filter: { timestampIsGreaterThan: "2026-10-26T09:00:00Z" }, position: -10 }, "0"]),
+      ADMIN,
+      store,
+    );
+    expect(queries[0]).toMatchObject({ from: new Date("2026-10-26T09:00:00.001Z"), position: -10 });
+  });
+
   it("answers method errors the way JMAP does", async () => {
     const { store } = storeWith();
     const { methodResponses } = await handleTraceJmap(

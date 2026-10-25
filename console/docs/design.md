@@ -598,10 +598,16 @@ The console replaces the data, not the screens.
   - A trace's sender, recipients and size come from the events that describe the delivery: an
     attempt's first event, or a session's envelope and the messages it queued.
   - Messages the server makes along the way, such as a bounce, are not counted.
-- **Message ingest times** come from the `elapsed` value of `message-ingest.*` events, as a
-  derived histogram. The community export has no ingest histogram.
-- **Not available:** latencies for message indexing, DNS lookups, and the data and blob stores.
-  The API names them as unavailable, and the dashboards say so instead of showing zero.
+- **Derived latencies.** The community export has no histograms for message ingest, indexing or
+  DNS lookups. They are derived from the `elapsed` value of the same events the server's own
+  histograms observe:
+  - ingest: `message-ingest.ham`, `spam`, `imap-append` and `jmap-append`;
+  - indexing: `message-ingest.search-index`;
+  - DNS lookups: `delivery.mx-lookup`, `ip-lookup` and `null-mx`, and the `tls-rpt.*`, `mta-sts.*`
+    and `dane.*` lookups, when they took time.
+- **Not available:** the data and blob store latencies. They come from debug-level events on every
+  read and write, too many to send. The API names them as unavailable, and the dashboards say so
+  instead of showing zero.
 
 **Serving the data.** `/api/v1/insights/` answers in the Enterprise endpoints' shapes, so the web
 UI's own pages need only to be pointed at it.
@@ -612,9 +618,17 @@ UI's own pages need only to be pointed at it.
 - **Polling, not streams.** Live Tracing polls every two seconds and live cards every 30.
   - That needs no long-lived connections on Cloud Run.
   - It carries the administrator's token in a header, like every other request.
+  - A feed rides out failures that may pass (the network, a rate limit, a server error) by
+    waiting longer each time, and keeps its cursor, so no event is shown twice. A refusal, such
+    as a missing permission, is shown at once.
+  - Each answer is one statement, so its events and its cursor come from the same snapshot.
+    Trace batches are stored one at a time, so event ids follow the order batches commit in, and
+    a feed past a cursor never misses one.
 - **Permissions.** Each route needs the permission the server would require: `liveMetrics`,
   `sysMetricQuery` and `sysMetricGet`, `liveTracing`, `sysTraceQuery` and `sysTraceGet`.
-  - The verifier returns the account's permissions, and each route checks its own.
+  - The verifier refuses an account with none of the permissions any route accepts, so ordinary
+    accounts never count as sessions that passed, and stay within the introspection budget.
+  - It returns the account's permissions, and each route checks its own.
   - The console's own routes still need `OPERATOR_PERMISSION`.
 
 **The patched web admin** (`webadmin/`) is upstream web UI v1.0.5 with an overlay and four

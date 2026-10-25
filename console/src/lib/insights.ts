@@ -9,12 +9,11 @@ import type { TraceEvent } from "./traceValues";
 // (Enterprise-only) endpoints, so its pages need only to be pointed here.
 
 /**
- * Metrics the community edition does not export and the console cannot derive. The dashboards
- * show these as not collected rather than as zero.
+ * Metrics the community edition does not export and the console cannot derive: store latencies
+ * come from debug-level events on every read and write, too many to send. The dashboards show
+ * these as not collected rather than as zero.
  */
 export const UNAVAILABLE_METRICS: ReadonlySet<string> = new Set([
-  "message-ingest.index-time",
-  "dns.lookup-time",
   "store.data-read-time",
   "store.data-write-time",
   "store.blob-read-time",
@@ -24,6 +23,14 @@ export const UNAVAILABLE_METRICS: ReadonlySet<string> = new Set([
 export const METRIC_PERMISSIONS = ["sysMetricQuery", "sysMetricGet"] as const;
 export const LIVE_METRIC_PERMISSIONS = ["liveMetrics"] as const;
 export const LIVE_TRACING_PERMISSIONS = ["liveTracing"] as const;
+export const TRACE_PERMISSIONS = ["sysTraceQuery", "sysTraceGet"] as const;
+/** Every permission some insights route accepts. */
+export const INSIGHTS_PERMISSIONS: readonly string[] = [
+  ...METRIC_PERMISSIONS,
+  ...LIVE_METRIC_PERMISSIONS,
+  ...LIVE_TRACING_PERMISSIONS,
+  ...TRACE_PERMISSIONS,
+];
 
 const METRIC_ID = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 const MAX_METRICS = 64;
@@ -158,8 +165,10 @@ function traceFilter(filter: unknown): Pick<TraceQuery, "kinds" | "text" | "from
       }
       case "timestampIsGreaterThan":
       case "timestampIsGreaterThanOrEqual": {
+        // "After" a day starts the next day; after an instant, the next millisecond.
         const date = dateOf(value, key);
-        later(key === "timestampIsGreaterThan" && DATE_ONLY.test(String(value)) ? new Date(date.getTime() + DAY_MS) : date);
+        const after = key === "timestampIsGreaterThan" ? (DATE_ONLY.test(String(value)) ? DAY_MS : 1) : 0;
+        later(new Date(date.getTime() + after));
         break;
       }
       case "timestampIsLessThan":
@@ -196,7 +205,8 @@ async function traceQuery(args: Record<string, unknown>, store: TraceStore): Pro
   const query: TraceQuery = {
     ...traceFilter(args.filter),
     ascending,
-    position: wholeNumber(args.position, "position", 0, 0),
+    // A negative position counts from the end, as RFC 8620 allows.
+    position: wholeNumber(args.position, "position", 0, Number.MIN_SAFE_INTEGER),
     anchor,
     anchorOffset: wholeNumber(args.anchorOffset, "anchorOffset", 0, Number.MIN_SAFE_INTEGER),
     limit,
@@ -272,10 +282,10 @@ function resolveReferences(args: Record<string, unknown>, done: ReadonlyMap<stri
   return resolved;
 }
 
-const METHODS: Record<string, { permission: string; run: (args: Record<string, unknown>, store: TraceStore) => Promise<Record<string, unknown>> }> = {
-  "x:Trace/query": { permission: "sysTraceQuery", run: traceQuery },
-  "x:Trace/get": { permission: "sysTraceGet", run: traceGet },
-};
+const METHODS = new Map<string, { permission: string; run: (args: Record<string, unknown>, store: TraceStore) => Promise<Record<string, unknown>> }>([
+  ["x:Trace/query", { permission: "sysTraceQuery", run: traceQuery }],
+  ["x:Trace/get", { permission: "sysTraceGet", run: traceGet }],
+]);
 
 /** A JMAP request with `x:Trace/query` and `x:Trace/get` calls, answered as the server would. */
 export async function handleTraceJmap(body: unknown, operator: Operator, store: TraceStore): Promise<{ methodResponses: Invocation[]; sessionState: string }> {
@@ -288,7 +298,7 @@ export async function handleTraceJmap(body: unknown, operator: Operator, store: 
       throw new ApiError(400, "bad_request", "a method call is malformed");
     }
     const [name, args, callId] = call as Invocation;
-    const method = METHODS[name];
+    const method = METHODS.get(name);
     try {
       if (!method) throw new MethodError("unknownMethod", `${name} is not served here`);
       try {

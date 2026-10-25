@@ -168,8 +168,8 @@ secret. Its only redirect URI is `<SERVER_URL>/console/oauth/callback`.
 | Variable | What the script does |
 | --- | --- |
 | `TRACING_WEBHOOK_URL` | The ingest's `/api/ingest/traces`. Creates or updates the tracing webhook, signed with the same key. It subscribes to the event types in [`src/lib/trace-event-types.json`](src/lib/trace-event-types.json) that the server knows. |
-| `METRICS_PUSH_URL`, `METRICS_PUSH_TOKEN` | The ingest's `/api/ingest/metrics` and its token. Makes the server push its metrics there every minute (OpenTelemetry over HTTP). The Prometheus endpoint and the choice of metrics stay as they are. |
-| `QUEUE_READER_SECRET_FILE`, `QUEUE_READER_SECRET` | Signs in as the principal and makes it an app password that may only sign in and count the delivery queue. The server makes the secret and shows it once, so the script writes a new one to `QUEUE_READER_SECRET_FILE`, readable only by you, and never prints it. Give the ingest that secret as `QUEUE_READER_SECRET`, then delete the file. When `QUEUE_READER_SECRET` is set and still works, nothing changes. |
+| `METRICS_PUSH_URL`, `METRICS_PUSH_TOKEN` | The ingest's `/api/ingest/metrics` and its token. Makes the server push its metrics there every minute (OpenTelemetry over HTTP). The Prometheus endpoint and the choice of metrics stay as they are. If the server already pushes elsewhere, the script stops, unless `METRICS_PUSH_REPLACE=1`. |
+| `QUEUE_READER_SECRET_FILE`, `QUEUE_READER_SECRET` | Signs in as the principal and makes it an app password that may only sign in and count the delivery queue. The server makes the secret and shows it once, so the script writes a new one to `QUEUE_READER_SECRET_FILE`, readable only by you, and never prints it. Give the ingest that secret as `QUEUE_READER_SECRET`, then delete the file. When `QUEUE_READER_SECRET` is set and still works, nothing changes; without it, every run makes a new one and removes the old. A secret the server cannot be asked about is left as it is. |
 
 The server's webhooks ignore their `level` setting and send exactly the events they list. So
 the tracing webhook lists its events: those at `info` level and above, plus the debug-level
@@ -191,6 +191,8 @@ The console collects the same data from what the community edition exports:
 - **Queue size.** The queue reader counts it with each push.
 - **Traces.** The tracing webhook's events. Inbound SMTP sessions and outbound delivery
   attempts are grouped into traces by span.
+- **Latencies the export lacks.** Message ingest, indexing and DNS lookup times are measured from
+  the same events the server's own histograms observe.
 
 The api role serves it in the Enterprise endpoints' shapes, under `/api/v1/insights/`:
 - metric history and current values;

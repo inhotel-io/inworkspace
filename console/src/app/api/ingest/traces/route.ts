@@ -1,13 +1,10 @@
 import { getConfig, servesIngest } from "@/lib/config";
 import { getPool } from "@/lib/db";
 import { createIngestHandler } from "@/lib/ingest";
-import { addToHistogram } from "@/lib/metricSamples";
+import { addToHistogram, type PushResult } from "@/lib/metricSamples";
 import { recordSamples } from "@/lib/metricStore";
-import { ingestTimes, traceRow } from "@/lib/traceEvents";
+import { derivedTimes, traceRow } from "@/lib/traceEvents";
 import { insertTraceEvents, pruneTraces } from "@/lib/traceStore";
-
-/** The community edition exports no ingest times; they come from message-ingest events instead. */
-const INGEST_TIME = "message-ingest.time";
 
 let handler: ((request: Request) => Promise<Response>) | undefined;
 
@@ -23,14 +20,26 @@ function tracesHandler(): (request: Request) => Promise<Response> {
         const fresh = await insertTraceEvents(pool, rows, ({ row, error }) =>
           log({ severity: "ERROR", message: "console.traces.row-rejected", type: row.type, eventAt: String(row.eventAt), error }),
         );
-        const times = ingestTimes(fresh);
-        if (times.length > 0) {
-          await recordSamples(pool, (previous) => {
-            const state = previous.get(INGEST_TIME);
-            // A server that exports ingest times itself is not counted twice.
-            if (state && state.startNs !== "derived") return { samples: [], states: [] };
-            return addToHistogram(state, INGEST_TIME, times);
-          });
+        // Latencies the community edition does not export, from the events just stored. The events
+        // are kept even when this fails, so the batch is not refused for it.
+        const times = derivedTimes(fresh);
+        if (times.size > 0) {
+          try {
+            await recordSamples(pool, (previous) => {
+              const result: PushResult = { samples: [], states: [] };
+              for (const [metric, observations] of times) {
+                const state = previous.get(metric);
+                // A server that exports this latency itself is not counted twice.
+                if (state && state.startNs !== "derived") continue;
+                const added = addToHistogram(state, metric, observations);
+                result.samples.push(...added.samples);
+                result.states.push(...added.states);
+              }
+              return result;
+            });
+          } catch (error) {
+            log({ severity: "ERROR", message: "console.traces.derived-times-failed", error: error instanceof Error ? error.message : String(error) });
+          }
         }
         return fresh.length;
       },

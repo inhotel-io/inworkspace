@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseBatch } from "./normalize";
-import { ingestTimes, summarizeSpan, traceRow, type SpanEvent } from "./traceEvents";
+import { derivedTimes, summarizeSpan, traceRow, type SpanEvent } from "./traceEvents";
 
 const batch = parseBatch(readFileSync(new URL("./__fixtures__/webhook-batch.json", import.meta.url), "utf8"));
 const at = (second: number) => new Date(Date.UTC(2026, 9, 26, 9, 0, second));
@@ -53,11 +53,29 @@ describe("summarizeSpan", () => {
   });
 });
 
-describe("ingestTimes", () => {
+describe("derivedTimes", () => {
   it("reads the elapsed time of stored messages", () => {
-    expect(ingestTimes(batch.map(traceRow))).toEqual([
+    expect(derivedTimes(batch.map(traceRow)).get("message-ingest.time")).toEqual([
       { at: new Date("2026-10-25T11:19:51Z"), value: 1 },
       { at: new Date("2026-10-25T11:20:29Z"), value: 0 },
+    ]);
+  });
+
+  it("measures indexing and DNS lookups as the server does, counting only lookups that took time", () => {
+    const row = (type: string, elapsed: unknown) => traceRow({ type, createdAt: "2026-10-26T09:00:00Z", data: { elapsed } });
+    const times = derivedTimes([
+      row("message-ingest.search-index", 7),
+      row("message-ingest.jmap-append", 2),
+      row("delivery.mx-lookup", 12),
+      row("mta-sts.policy-fetch", 30),
+      row("delivery.ip-lookup", 0),
+      row("dane.tlsa-record-fetch", "x"),
+      row("smtp.ehlo", 5),
+    ]);
+    expect([...times].map(([metric, values]) => [metric, values.map((v) => v.value)])).toEqual([
+      ["message-ingest.index-time", [7]],
+      ["message-ingest.time", [2]],
+      ["dns.lookup-time", [12, 30]],
     ]);
   });
 });

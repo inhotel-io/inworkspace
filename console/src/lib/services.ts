@@ -3,6 +3,7 @@ import path from "node:path";
 import { createTokenVerifier, forwardedClient, LOCAL_OPERATOR, type TokenVerifier } from "./auth";
 import { getConfig } from "./config";
 import { fetchAgents, type Agent, type DirectorySettings } from "./directory";
+import { INSIGHTS_PERMISSIONS } from "./insights";
 import { JmapClient, type Credentials } from "./jmap";
 import { buildUiShell, loadUiApp, uiSettingsFrom, type UiApp, type UiShell } from "./uiBundle";
 
@@ -54,6 +55,7 @@ export function operatorVerifier(): TokenVerifier {
         : createTokenVerifier({
             serverUrl: config.jmapUrl,
             principal: principalCredentials(),
+            acceptedPermissions: [config.operatorPermission, ...INSIGHTS_PERMISSIONS],
             allowedAccounts: config.allowedAccounts,
             clientOf: forwardedClient(config.trustedProxyHops),
             maxTokenLifetimeMs: config.maxAccessTokenLifetimeSeconds * 1000,

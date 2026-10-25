@@ -35,9 +35,10 @@ export interface PushResult {
 }
 
 /**
- * A series the console has never seen counts as new only if the server began counting it this
- * recently; otherwise its first value is everything since a restart long ago, and only becomes the
- * baseline.
+ * A series the console has never seen is new when the server began counting this recently, or when
+ * the console already has other series from the same server run: the server sends a counter or
+ * histogram only once it is above zero, so it was zero at the last push. Otherwise its first value
+ * is everything since a restart the console did not see, and only becomes the baseline.
  */
 export const FRESH_SERIES_MS = 3 * 60_000;
 
@@ -59,8 +60,8 @@ function latest(points: readonly { timeNs: bigint; startTimeNs: bigint }[]) {
  * The increase since the previous push. A different start time, or a value that went down, means
  * the server restarted, and everything it reports now came after that.
  */
-function increase(current: number, previous: SeriesState | undefined, startNs: bigint, at: Date): number | null {
-  if (!previous) return at.getTime() - nsToDate(startNs).getTime() <= FRESH_SERIES_MS ? current : null;
+function increase(current: number, previous: SeriesState | undefined, startNs: bigint, at: Date, knownRun: boolean): number | null {
+  if (!previous) return knownRun || at.getTime() - nsToDate(startNs).getTime() <= FRESH_SERIES_MS ? current : null;
   if (previous.startNs !== startNs.toString() || current < previous.count) return current;
   return current - previous.count;
 }
@@ -69,10 +70,12 @@ function increase(current: number, previous: SeriesState | undefined, startNs: b
 export function samplesFromPush(metrics: readonly OtlpMetric[], previous: ReadonlyMap<string, SeriesState>): PushResult {
   const samples: MetricSample[] = [];
   const states: SeriesState[] = [];
+  const knownRuns = new Set([...previous.values()].filter((state) => state.startNs !== "derived").map((state) => state.startNs));
 
   for (const metric of metrics) {
     if (metric.points.length === 0) continue;
     const { at, startNs } = latest(metric.points);
+    const knownRun = knownRuns.has(startNs.toString());
 
     if (metric.kind === "gauge" || (metric.kind === "sum" && !metric.monotonic)) {
       const value = metric.points.reduce((total, point) => total + point.value, 0);
@@ -87,7 +90,7 @@ export function samplesFromPush(metrics: readonly OtlpMetric[], previous: Readon
         continue;
       }
       const before = previous.get(metric.name);
-      const added = increase(value, before, startNs, at);
+      const added = increase(value, before, startNs, at, knownRun);
       if (added !== null && added > 0) samples.push({ metric: metric.name, kind: "counter", at, count: added, sum: null });
       states.push({ metric: metric.name, kind: "counter", startNs: startNs.toString(), count: value, sum: 0, totalCount: 0, totalSum: 0 });
       continue;
@@ -101,13 +104,14 @@ export function samplesFromPush(metrics: readonly OtlpMetric[], previous: Readon
     if (metric.temporality === "delta") {
       added = { count, sum };
     } else {
-      const addedCount = increase(count, before, startNs, at);
+      const addedCount = increase(count, before, startNs, at, knownRun);
       const restarted = !before || before.startNs !== startNs.toString() || count < before.count;
       added = addedCount === null ? null : { count: addedCount, sum: restarted ? sum : sum - before.sum };
     }
     if (!before) {
-      // The first sample is the baseline the dashboards measure the next one against.
-      const baselineAt = added && added.count > 0 ? nsToDate(startNs) : at;
+      // The first sample is the baseline the dashboards measure the next one against; what this
+      // push adds is placed just after it.
+      const baselineAt = added && added.count > 0 ? new Date(at.getTime() - 1) : at;
       samples.push({ metric: metric.name, kind: "histogram", at: baselineAt, count: 0, sum: 0 });
     }
     if (added && added.count > 0) {
