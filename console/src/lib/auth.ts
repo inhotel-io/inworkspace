@@ -283,7 +283,7 @@ export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
     }
     const granted = new Set(permissions.filter((permission): permission is string => typeof permission === "string"));
     if (!options.acceptedPermissions.some((permission) => granted.has(permission))) {
-      return refused(403, `${login} has none of the permissions the console needs`);
+      return refused(403, `${login} has none of the permissions the console accepts: ${options.acceptedPermissions.join(", ")}`);
     }
     rememberPassed(key, state.exp * 1000, at);
     return remember(key, { operator: { login, permissions: granted } }, Math.min(at + cacheMs, state.exp * 1000));

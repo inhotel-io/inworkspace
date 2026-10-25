@@ -341,7 +341,7 @@ try {
   step("Refusing accounts without the permissions");
   const viewerToken = await signIn(`viewer@${DOMAIN}`, viewerSecret);
   const plain = await insights("metrics/live?metric=server.memory", viewerToken);
-  expect(plain.status === 403 && /none of the permissions/.test(plain.body.error.message), "an account with none of the console's permissions is refused");
+  expect(plain.status === 403 && /none of the permissions the console accepts/.test(plain.body.error.message), "an account with none of the console's permissions is refused");
   expect((await traceJmap(viewerToken, [["x:Trace/query", {}, "0"]])).status === 403, "including for trace queries");
   const watcherToken = await signIn(`watcher@${DOMAIN}`, watcherSecret);
   expect((await insights("metrics/live?metric=server.memory", watcherToken)).status === 200, "an account with liveMetrics may read live metrics");

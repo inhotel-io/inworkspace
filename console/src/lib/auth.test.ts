@@ -208,7 +208,7 @@ describe("createTokenVerifier", () => {
     const server = fakeServer({ permissions: ["authenticate"], username: "jane@example.com" });
     const clock = { now: NOW };
     const verify = verifierFor(server, clock, { perMinute: 1, perClientPerMinute: 5 });
-    const refusal = { status: 403, message: "jane@example.com has none of the permissions the console needs" };
+    const refusal = { status: 403, message: "jane@example.com has none of the permissions the console accepts: impersonate, liveMetrics" };
     await expect(verify(bearer(TOKEN, "203.0.113.9"))).rejects.toMatchObject(refusal);
     await expect(verify(bearer(TOKEN, "203.0.113.9"))).rejects.toMatchObject(refusal);
     expect(server.calls).toHaveLength(3);
