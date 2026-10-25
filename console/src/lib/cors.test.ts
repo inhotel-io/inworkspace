@@ -25,6 +25,12 @@ describe("preflight", () => {
     expect(response.headers.get("access-control-max-age")).toBe("600");
   });
 
+  it("also allows POST with a JSON body where a route takes one", () => {
+    const response = preflight(SERVER, SERVER, true);
+    expect(response.headers.get("access-control-allow-methods")).toBe("GET, POST");
+    expect(response.headers.get("access-control-allow-headers")).toBe("Authorization, Content-Type");
+  });
+
   it("refuses any other origin", () => {
     const response = preflight("https://attacker.example", SERVER);
     expect(response.status).toBe(403);

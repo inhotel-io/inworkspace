@@ -63,6 +63,41 @@ describe("parseConfig", () => {
     const config = parseConfig(INGEST);
     expect(config.retentionDays).toBe(30);
     expect(config.webhookSigningKey).toBe("k".repeat(32));
+    expect(config.metricsPushToken).toBe("");
+    expect(config.metricRetentionDays).toBe(90);
+    expect(config.traceRetentionDays).toBe(30);
+    expect(config.queueReader).toBeNull();
+    expect(config.jmapUrl).toBe("");
+  });
+
+  it("reads the metrics push, retention and queue reader settings", () => {
+    const config = parseConfig({
+      ...INGEST,
+      METRICS_PUSH_TOKEN: "t".repeat(40),
+      METRIC_RETENTION_DAYS: "30",
+      TRACE_RETENTION_DAYS: "7",
+      QUEUE_READER_LOGIN: "Console@Example.com",
+      QUEUE_READER_SECRET: "app-password",
+      JMAP_URL: "https://mail.example.com",
+    });
+    expect(config.metricsPushToken).toBe("t".repeat(40));
+    expect(config.metricRetentionDays).toBe(30);
+    expect(config.traceRetentionDays).toBe(7);
+    expect(config.queueReader).toEqual({ login: "console@example.com", secret: "app-password" });
+    expect(config.jmapUrl).toBe("https://mail.example.com");
+  });
+
+  it("checks the metrics push and queue reader settings", () => {
+    expect(problemsOf({ ...INGEST, METRICS_PUSH_TOKEN: "short" })).toContain("METRICS_PUSH_TOKEN must be 32 to 256 token characters");
+    expect(problemsOf({ ...INGEST, TRACE_RETENTION_DAYS: "0" })).toContain(
+      "TRACE_RETENTION_DAYS must be a whole number of days from 1 to 3650",
+    );
+    expect(problemsOf({ ...INGEST, QUEUE_READER_LOGIN: "console@example.com" })).toContain(
+      "QUEUE_READER_LOGIN and QUEUE_READER_SECRET go together",
+    );
+    expect(problemsOf({ ...INGEST, QUEUE_READER_LOGIN: "console@example.com", QUEUE_READER_SECRET: "x" })).toContain(
+      "JMAP_URL is required",
+    );
   });
 
   it("does not require api settings for the ingest role", () => {

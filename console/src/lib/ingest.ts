@@ -1,4 +1,4 @@
-import { BatchError, normalizeEvent, parseBatch, type EventRow } from "./normalize";
+import { BatchError, parseBatch, type WebhookEvent } from "./normalize";
 import { verifySignature } from "./signature";
 
 /**
@@ -8,9 +8,11 @@ import { verifySignature } from "./signature";
 export const MAX_INGEST_BYTES = 25 * 1024 * 1024;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
-export interface IngestDeps {
+export interface IngestDeps<Row> {
   signingKey: string;
-  insert: (rows: EventRow[]) => Promise<number>;
+  /** The rows a batch's events become. */
+  toRows: (events: WebhookEvent[]) => Row[];
+  insert: (rows: Row[]) => Promise<number>;
   prune: () => Promise<number>;
   now: () => number;
   log: (entry: Record<string, unknown>) => void;
@@ -21,7 +23,7 @@ function messageOf(error: unknown): string {
 }
 
 /** Handles the server's event webhook: size limit, signature, parse, store, occasional prune. */
-export function createIngestHandler(deps: IngestDeps): (request: Request) => Promise<Response> {
+export function createIngestHandler<Row>(deps: IngestDeps<Row>): (request: Request) => Promise<Response> {
   let lastPruneAt = Number.NEGATIVE_INFINITY;
   return async (request) => {
     const body = await readBody(request, MAX_INGEST_BYTES);
@@ -39,9 +41,9 @@ export function createIngestHandler(deps: IngestDeps): (request: Request) => Pro
       return reply(401);
     }
 
-    let rows: EventRow[];
+    let rows: Row[];
     try {
-      rows = parseBatch(new TextDecoder().decode(body)).map(normalizeEvent);
+      rows = deps.toRows(parseBatch(new TextDecoder().decode(body)));
     } catch (error) {
       if (error instanceof BatchError) {
         deps.log({ severity: "ERROR", message: "console.ingest.malformed", error: error.message, bytes: body.byteLength });
@@ -71,11 +73,12 @@ export function createIngestHandler(deps: IngestDeps): (request: Request) => Pro
   };
 }
 
-function reply(status: number): Response {
+export function reply(status: number): Response {
   return new Response(null, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-async function readBody(request: Request, limit: number): Promise<Uint8Array | null> {
+/** The body, or null when it is larger than `limit`. */
+export async function readBody(request: Request, limit: number): Promise<Uint8Array | null> {
   if (Number(request.headers.get("content-length") ?? "0") > limit) return null;
   if (!request.body) return new Uint8Array();
   const reader = request.body.getReader();

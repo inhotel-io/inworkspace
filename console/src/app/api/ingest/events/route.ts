@@ -2,6 +2,7 @@ import { getConfig, servesIngest } from "@/lib/config";
 import { getPool } from "@/lib/db";
 import { insertEvents, pruneEvents } from "@/lib/eventStore";
 import { createIngestHandler } from "@/lib/ingest";
+import { normalizeEvent } from "@/lib/normalize";
 
 let handler: ((request: Request) => Promise<Response>) | undefined;
 
@@ -12,6 +13,7 @@ function ingestHandler(): (request: Request) => Promise<Response> {
     const log = (entry: Record<string, unknown>) => console.log(JSON.stringify(entry));
     handler = createIngestHandler({
       signingKey: config.webhookSigningKey,
+      toRows: (events) => events.map(normalizeEvent),
       insert: (rows) =>
         insertEvents(pool, rows, ({ row, error }) =>
           log({ severity: "ERROR", message: "console.ingest.row-rejected", type: row.type, eventAt: String(row.eventAt), error }),

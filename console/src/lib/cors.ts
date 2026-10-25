@@ -5,14 +5,15 @@ export function corsHeaders(origin: string | null, allowedOrigin: string): Recor
     : { Vary: "Origin" };
 }
 
-export function preflight(origin: string | null, allowedOrigin: string): Response {
+/** Reads by default; a route that takes a JSON body (the trace queries) also allows POST and its Content-Type. */
+export function preflight(origin: string | null, allowedOrigin: string, acceptsBody = false): Response {
   if (origin !== allowedOrigin) return new Response(null, { status: 403, headers: { Vary: "Origin" } });
   return new Response(null, {
     status: 204,
     headers: {
       ...corsHeaders(origin, allowedOrigin),
-      "Access-Control-Allow-Methods": "GET",
-      "Access-Control-Allow-Headers": "Authorization",
+      "Access-Control-Allow-Methods": acceptsBody ? "GET, POST" : "GET",
+      "Access-Control-Allow-Headers": acceptsBody ? "Authorization, Content-Type" : "Authorization",
       "Access-Control-Max-Age": "600",
     },
   });

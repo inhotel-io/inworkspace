@@ -1,0 +1,96 @@
+diff --git a/src/components/lists/DynamicList.tsx b/src/components/lists/DynamicList.tsx
+index fe65d93..b7644d6 100644
+--- a/src/components/lists/DynamicList.tsx
++++ b/src/components/lists/DynamicList.tsx
+@@ -62,6 +62,7 @@ import { jmapGetBatched, jmapQueryAll, jmapQueryAndGet, jmapSet, getAccountId }
+ import type { Schema, Field, MassAction, ItemAction, Filter as FilterDef } from '@/types/schema';
+ import type { JmapSetResponse, JmapSetError } from '@/types/jmap';
+ import type { ResolvedSchema } from '@/lib/schemaResolver';
++import { isReplicatedView } from '@/features/insights/replicated';
+ 
+ const PAGE_SIZE = 25;
+ const MAX_REPORTED_ERRORS = 3;
+@@ -802,9 +803,11 @@ export function DynamicList({ viewName }: DynamicListProps) {
+     [viewName, viewToSection, navigate],
+   );
+ 
+-  const canCreate = resolved ? hasObjectPermission(resolved.obj.permissionPrefix, 'Create') : false;
+-  const canUpdate = resolved ? hasObjectPermission(resolved.obj.permissionPrefix, 'Update') : false;
+-  const canDelete = resolved ? hasObjectPermission(resolved.obj.permissionPrefix, 'Destroy') : false;
++  // inWorkspace: the traces the inWorkspace Console keeps are read-only.
++  const readOnly = resolved ? isReplicatedView(resolved.obj.objectName) : false;
++  const canCreate = resolved && !readOnly ? hasObjectPermission(resolved.obj.permissionPrefix, 'Create') : false;
++  const canUpdate = resolved && !readOnly ? hasObjectPermission(resolved.obj.permissionPrefix, 'Update') : false;
++  const canDelete = resolved && !readOnly ? hasObjectPermission(resolved.obj.permissionPrefix, 'Destroy') : false;
+ 
+   if (!schema) {
+     return (
+@@ -829,7 +832,7 @@ export function DynamicList({ viewName }: DynamicListProps) {
+ 
+   const effectiveMassActions: MassAction[] = (() => {
+     const schemaActions = list.massActions ?? [];
+-    const canDestroy = obj.objectType.type === 'object' && hasObjectPermission(obj.permissionPrefix, 'Destroy');
++    const canDestroy = obj.objectType.type === 'object' && !readOnly && hasObjectPermission(obj.permissionPrefix, 'Destroy');
+     if (!canDestroy) return schemaActions;
+ 
+     const hasSchemaDelete = schemaActions.some((a) => a.type === 'delete');
+diff --git a/src/lib/layout.ts b/src/lib/layout.ts
+index 227e24b..3b86a70 100644
+--- a/src/lib/layout.ts
++++ b/src/lib/layout.ts
+@@ -6,6 +6,7 @@
+ 
+ import type { Layout, LayoutItem, LayoutSubItem, Schema } from '@/types/schema';
+ import { resolveObject } from '@/lib/schemaResolver';
++import { isReplicatedView } from '@/features/insights/replicated';
+ 
+ function findFirstSubLink(items: LayoutSubItem[]): string | null {
+   for (const item of items) {
+@@ -38,17 +39,18 @@ interface SpecialLinkInfo {
+   enterprise: boolean;
+ }
+ 
++// inWorkspace: the Dashboard, Live Tracing and the trace History lists are served by the
++// inWorkspace Console in this build, so they are not Enterprise features here.
+ function checkSpecialLink(
+   viewName: string,
+-  edition: string,
++  _edition: string,
+   hasPerm?: HasPermission,
+   canGet?: CanGet,
+ ): SpecialLinkInfo | null {
+   if (viewName.startsWith('Dashboard/') || viewName === 'CustomComponent/Dashboard') {
+-    if (edition === 'oss') return { visible: false, enterprise: true };
+     const hasLiveMetrics = hasPerm ? hasPerm('liveMetrics') : true;
+     const hasTraceGet = canGet ? canGet('sysTrace') : true;
+-    return { visible: hasLiveMetrics && hasTraceGet, enterprise: true };
++    return { visible: hasLiveMetrics && hasTraceGet, enterprise: false };
+   }
+ 
+   if (viewName === 'CustomComponent/LiveDelivery') {
+@@ -57,9 +59,8 @@ function checkSpecialLink(
+   }
+ 
+   if (viewName === 'CustomComponent/LiveTracing') {
+-    if (edition === 'oss') return { visible: false, enterprise: true };
+     const allowed = hasPerm ? hasPerm('liveTracing') : true;
+-    return { visible: allowed, enterprise: true };
++    return { visible: allowed, enterprise: false };
+   }
+ 
+   if (viewName.startsWith('CustomComponent/')) {
+@@ -86,12 +87,13 @@ export function isLinkVisible(
+ 
+   if (!canGet(resolved.permissionPrefix)) return false;
+ 
+-  if (resolved.enterprise && edition === 'oss') return false;
++  if (resolved.enterprise && edition === 'oss' && !isReplicatedView(viewName)) return false;
+ 
+   return true;
+ }
+ 
+ export function isLinkEnterprise(schema: Schema, viewName: string, edition: string): boolean {
++  if (isReplicatedView(viewName)) return false;
+   const special = checkSpecialLink(viewName, edition);
+   if (special !== null) return special.enterprise;
+ 

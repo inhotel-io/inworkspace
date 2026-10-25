@@ -1,5 +1,5 @@
 import type { ApiErrorBody, ApiErrorCode } from "./apiTypes";
-import { AuthError, RateLimitError, VerifierUnavailableError, type Operator } from "./auth";
+import { AuthError, RateLimitError, requirePermissions, VerifierUnavailableError, type Operator } from "./auth";
 import { corsHeaders, preflight } from "./cors";
 import { JmapError } from "./jmap";
 
@@ -20,6 +20,8 @@ export interface ApiRouteDeps {
   enabled: () => boolean;
   allowedOrigin: () => string;
   verify: (headers: Headers) => Promise<Operator>;
+  /** What a route needs when it names nothing else: the console's operator permission. */
+  permission: () => string;
   log: (entry: Record<string, unknown>) => void;
 }
 
@@ -56,14 +58,20 @@ function errorResponse(error: unknown, cors: HeaderMap, log: ApiRouteDeps["log"]
   return send(500, "internal", "The console failed to answer.");
 }
 
-/** Every API handler runs behind this: role, CORS, the operator's token, then JSON either way. */
+export interface ApiRouteOptions {
+  /** The server permissions an operator needs here, instead of the console's operator permission. */
+  permissions?: readonly string[];
+}
+
+/** Every API handler runs behind this: role, CORS, the operator's token and permissions, then JSON either way. */
 export function createApiRoute(deps: ApiRouteDeps) {
-  return function apiRoute<P = unknown>(handler: (context: ApiContext<P>) => Promise<unknown>) {
+  return function apiRoute<P = unknown>(handler: (context: ApiContext<P>) => Promise<unknown>, options: ApiRouteOptions = {}) {
     return async (request: Request, context: { params: Promise<P> }): Promise<Response> => {
       if (!deps.enabled()) return new Response(null, { status: 404 });
       const cors = corsHeaders(request.headers.get("origin"), deps.allowedOrigin());
       try {
         const operator = await deps.verify(request.headers);
+        requirePermissions(operator, options.permissions ?? [deps.permission()]);
         const body = await handler({ request, operator, params: await context.params });
         return Response.json(body, { headers: { ...cors, "Cache-Control": "no-store" } });
       } catch (error) {
@@ -73,9 +81,9 @@ export function createApiRoute(deps: ApiRouteDeps) {
   };
 }
 
-export function createPreflight(deps: Pick<ApiRouteDeps, "enabled" | "allowedOrigin">) {
+export function createPreflight(deps: Pick<ApiRouteDeps, "enabled" | "allowedOrigin">, acceptsBody = false) {
   return (request: Request): Response => {
     if (!deps.enabled()) return new Response(null, { status: 404 });
-    return preflight(request.headers.get("origin"), deps.allowedOrigin());
+    return preflight(request.headers.get("origin"), deps.allowedOrigin(), acceptsBody);
   };
 }

@@ -1,0 +1,323 @@
+diff --git a/src/features/dashboard/stores/historyMetricsStore.ts b/src/features/dashboard/stores/historyMetricsStore.ts
+index 11dd713..230b1fc 100644
+--- a/src/features/dashboard/stores/historyMetricsStore.ts
++++ b/src/features/dashboard/stores/historyMetricsStore.ts
+@@ -7,7 +7,7 @@
+ import { create } from 'zustand';
+ import type { Metric, MetricId, Period } from '../types/metrics';
+ import { periodWindow, periodKey } from '../helpers';
+-import { getAccountId, jmapQueryAllAndGet } from '@/services/jmap/client';
++import { fetchMetricHistory } from '@/features/insights/consoleApi';
+ import i18n from '@/i18n';
+ 
+ type FetchStatus = 'idle' | 'loading' | 'error';
+@@ -32,18 +32,9 @@ async function fetchMetrics(period: Period, ids: Set<MetricId>): Promise<Metric[
+   if (ids.size === 0) return [];
+ 
+   const { from, to } = periodWindow(period);
+-  const accountId = getAccountId('x:Metric');
+-  const metricIds = Array.from(ids);
+-
+-  const result = await jmapQueryAllAndGet('x:Metric', accountId, {
+-    filter: {
+-      timestampIsGreaterThanOrEqual: from.toISOString(),
+-      timestampIsLessThanOrEqual: to.toISOString(),
+-      metric: metricIds,
+-    },
+-  });
+-
+-  return result.list as Metric[];
++  // inWorkspace: the history is kept by the inWorkspace Console instead of the Enterprise metrics store.
++  const answer = await fetchMetricHistory(Array.from(ids), from, to);
++  return answer.metrics;
+ }
+ 
+ export const useHistoryMetricsStore = create<HistoryMetricsState>()((set, get) => ({
+diff --git a/src/features/dashboard/stores/liveMetricsStore.ts b/src/features/dashboard/stores/liveMetricsStore.ts
+index 54396bb..617793a 100644
+--- a/src/features/dashboard/stores/liveMetricsStore.ts
++++ b/src/features/dashboard/stores/liveMetricsStore.ts
+@@ -6,7 +6,7 @@
+ 
+ import { create } from 'zustand';
+ import type { MetricId, Metric } from '../types/metrics';
+-import { apiFetch } from '@/services/api';
++import { followLiveMetrics, lastingFeedError, type Feed } from '@/features/insights/feeds';
+ import i18n from '@/i18n';
+ 
+ type LiveStatus = 'idle' | 'connecting' | 'open' | 'error' | 'closed';
+@@ -22,7 +22,9 @@ interface LiveMetricsState {
+   handleBatch: (batch: Metric[]) => void;
+ }
+ 
+-let eventSource: EventSource | null = null;
++// inWorkspace: current values come from the inWorkspace Console, polled, instead of the
++// Enterprise server's live metrics stream.
++let eventSource: Feed | null = null;
+ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+ let reconnectAttempts = 0;
+ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+@@ -52,35 +54,15 @@ async function openStream(ids: Set<MetricId>) {
+   useLiveMetricsStore.setState({ status: 'connecting', subscribedIds: ids, error: null });
+ 
+   try {
+-    const tokenResponse = await apiFetch('/api/token/metrics');
+-    const token = await tokenResponse.text();
+-
+-    const metricsParam = Array.from(ids).join(',');
+-    const url = `${getOrigin()}/api/live/metrics?token=${encodeURIComponent(token)}&interval=30&metrics=${encodeURIComponent(metricsParam)}`;
+-
+-    const es = new EventSource(url);
+-    eventSource = es;
+-    reconnectAttempts = 0;
+-
+-    es.addEventListener('metrics', (event) => {
+-      try {
+-        const batch = JSON.parse(event.data) as Metric[];
+-        useLiveMetricsStore.getState().handleBatch(batch);
+-      } catch (e) {
+-        console.error('Failed to parse live metrics:', e);
+-      }
+-    });
+-
+-    es.onopen = () => {
+-      useLiveMetricsStore.setState({ status: 'open' });
+-    };
+-
+-    es.onerror = () => {
+-      if (es !== eventSource) return;
++    let es: Feed | null = null;
++    const handleError = (error: unknown) => {
++      if (!es || es !== eventSource) return;
+       es.close();
+       eventSource = null;
+ 
+-      if (reconnectAttempts < MAX_RECONNECT) {
++      // A missing permission or console will not pass by reconnecting.
++      const lasting = lastingFeedError(error);
++      if (!lasting && reconnectAttempts < MAX_RECONNECT) {
+         reconnectAttempts++;
+         useLiveMetricsStore.setState({ status: 'connecting' });
+         reconnectTimer = setTimeout(() => {
+@@ -90,13 +72,22 @@ async function openStream(ids: Set<MetricId>) {
+       } else {
+         useLiveMetricsStore.setState({
+           status: 'error',
+-          error: i18n.t(
+-            'dashboard.liveMetricsDisconnected',
+-            'Live metrics stream disconnected after multiple retries.',
+-          ),
++          error:
++            lasting ??
++            i18n.t('dashboard.liveMetricsDisconnected', 'Live metrics stream disconnected after multiple retries.'),
+         });
+       }
+     };
++
++    es = followLiveMetrics(ids, {
++      onData: (batch: Metric[]) => useLiveMetricsStore.getState().handleBatch(batch),
++      onOpen: () => {
++        reconnectAttempts = 0;
++        useLiveMetricsStore.setState({ status: 'open' });
++      },
++      onError: handleError,
++    });
++    eventSource = es;
+   } catch (e) {
+     useLiveMetricsStore.setState({
+       status: 'error',
+@@ -106,12 +97,6 @@ async function openStream(ids: Set<MetricId>) {
+   }
+ }
+ 
+-function getOrigin(): string {
+-  const envUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
+-  if (envUrl && envUrl.length > 0) return envUrl.replace(/\/+$/, '');
+-  return window.location.origin;
+-}
+-
+ let visibilityTimer: ReturnType<typeof setTimeout> | null = null;
+ 
+ function handleVisibilityChange() {
+diff --git a/src/features/tracing/components/LiveTracingPage.tsx b/src/features/tracing/components/LiveTracingPage.tsx
+index 658424b..e1ae28c 100644
+--- a/src/features/tracing/components/LiveTracingPage.tsx
++++ b/src/features/tracing/components/LiveTracingPage.tsx
+@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/badge';
+ import { Card, CardContent } from '@/components/ui/card';
+ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+ import { useSchemaStore } from '@/stores/schemaStore';
+-import { apiFetch, getApiBaseUrl } from '@/services/api';
++import { followTraceFeed, lastingFeedError, type Feed, type FeedPosition } from '@/features/insights/feeds';
+ import type { TraceEvent } from '../types';
+ import { TraceTimeline } from './TraceTimeline';
+ 
+@@ -30,7 +30,7 @@ interface KeyValueFilter {
+ type LiveTracingState =
+   | { kind: 'idle' }
+   | { kind: 'starting'; keywords: string; filters: KeyValueFilter[] }
+-  | { kind: 'streaming'; events: TraceEvent[]; anchorTimestamp: string; eventSource: EventSource }
++  | { kind: 'streaming'; events: TraceEvent[]; anchorTimestamp: string; eventSource: Feed }
+   | { kind: 'stopped'; events: TraceEvent[]; anchorTimestamp: string }
+   | { kind: 'error'; events: TraceEvent[]; error: string };
+ 
+@@ -43,15 +43,26 @@ export function LiveTracingPage() {
+   const [addingFilter, setAddingFilter] = useState(false);
+   const [newFilterKey, setNewFilterKey] = useState('');
+   const [newFilterValue, setNewFilterValue] = useState('');
+-  const eventSourceRef = useRef<EventSource | null>(null);
++  // inWorkspace: events come from the inWorkspace Console, polled, instead of the Enterprise
++  // server's live tracing stream.
++  const eventSourceRef = useRef<Feed | null>(null);
+   const eventsRef = useRef<TraceEvent[]>([]);
+   const anchorRef = useRef<string>('');
+   const reconnectAttempts = useRef(0);
++  // A pending reconnect would otherwise start polling again after Stop or leaving the page.
++  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const clearReconnect = () => {
++    if (reconnectTimerRef.current) {
++      clearTimeout(reconnectTimerRef.current);
++      reconnectTimerRef.current = null;
++    }
++  };
+ 
+   const keyEnum = useMemo(() => schema?.enums?.['Key'] ?? [], [schema]);
+ 
+   useEffect(() => {
+     return () => {
++      clearReconnect();
+       if (eventSourceRef.current) {
+         eventSourceRef.current.close();
+         eventSourceRef.current = null;
+@@ -60,34 +71,22 @@ export function LiveTracingPage() {
+   }, []);
+ 
+   const openStream = useCallback(async () => {
++    clearReconnect();
+     setState({ kind: 'starting', keywords, filters });
+     eventsRef.current = [];
+     anchorRef.current = '';
+     reconnectAttempts.current = 0;
+ 
+     try {
+-      const tokenResponse = await apiFetch('/api/token/tracing');
+-      const token = await tokenResponse.text();
+-
+-      const params = new URLSearchParams();
+-      params.set('token', token);
+-      if (keywords.trim()) {
+-        params.set('filter', keywords.trim());
+-      }
+-      for (const f of filters) {
+-        params.set(f.key, f.value);
+-      }
+-
+-      const baseUrl = getApiBaseUrl();
+-      const url = `${baseUrl}/api/live/tracing?${params.toString()}`;
++      const keyFilters = filters.map((f) => [f.key, f.value] as const);
++      // A reconnect continues where the last feed got to, so no event is shown twice.
++      const position: FeedPosition = { cursor: null };
+ 
+       const connectEventSource = () => {
+-        const es = new EventSource(url);
+-        eventSourceRef.current = es;
+-
+-        es.addEventListener('trace', (event) => {
++        let es: Feed | null = null;
++        const onEvents = (batch: TraceEvent[]) => {
++          if (!es) return;
+           try {
+-            const batch = JSON.parse(event.data) as TraceEvent[];
+             const currentEvents = eventsRef.current;
+ 
+             for (const evt of batch) {
+@@ -110,9 +109,10 @@ export function LiveTracingPage() {
+           } catch (e) {
+             console.error('Failed to parse trace event:', e);
+           }
+-        });
++        };
+ 
+-        es.onopen = () => {
++        const onOpen = () => {
++          if (!es) return;
+           reconnectAttempts.current = 0;
+           setState({
+             kind: 'streaming',
+@@ -122,22 +122,26 @@ export function LiveTracingPage() {
+           });
+         };
+ 
+-        es.onerror = () => {
+-          if (es !== eventSourceRef.current) return;
++        const onError = (error: unknown) => {
++          if (!es || es !== eventSourceRef.current) return;
+           es.close();
+           eventSourceRef.current = null;
+ 
+-          if (reconnectAttempts.current < MAX_RECONNECT) {
++          const lasting = lastingFeedError(error);
++          if (!lasting && reconnectAttempts.current < MAX_RECONNECT) {
+             reconnectAttempts.current++;
+-            setTimeout(connectEventSource, RECONNECT_DELAY);
++            reconnectTimerRef.current = setTimeout(connectEventSource, RECONNECT_DELAY);
+           } else {
+             setState({
+               kind: 'error',
+               events: [...eventsRef.current],
+-              error: t('tracing.liveDisconnected', 'Live tracing stream disconnected after multiple retries.'),
++              error: lasting ?? t('tracing.liveDisconnected', 'Live tracing stream disconnected after multiple retries.'),
+             });
+           }
+         };
++
++        es = followTraceFeed(keywords.trim(), keyFilters, { onData: onEvents, onOpen, onError }, position);
++        eventSourceRef.current = es;
+       };
+ 
+       connectEventSource();
+@@ -151,6 +155,7 @@ export function LiveTracingPage() {
+   }, [keywords, filters, t]);
+ 
+   const stopStream = useCallback(() => {
++    clearReconnect();
+     if (eventSourceRef.current) {
+       eventSourceRef.current.close();
+       eventSourceRef.current = null;
+@@ -168,6 +173,7 @@ export function LiveTracingPage() {
+   }, []);
+ 
+   const resetToIdle = useCallback(() => {
++    clearReconnect();
+     if (eventSourceRef.current) {
+       eventSourceRef.current.close();
+       eventSourceRef.current = null;
+diff --git a/src/services/jmap/client.ts b/src/services/jmap/client.ts
+index 9d98223..ec340b2 100644
+--- a/src/services/jmap/client.ts
++++ b/src/services/jmap/client.ts
+@@ -7,6 +7,8 @@
+ import { useAuthStore } from '@/stores/authStore';
+ import { apiFetch } from '@/services/api';
+ import { logJmapExchange } from '@/lib/debug';
++import { traceJmap } from '@/features/insights/consoleApi';
++import { isTraceRequest } from '@/features/insights/replicated';
+ import type { JmapMethodCall, JmapMethodResponse, JmapQueryResponse, JmapResponse } from '@/types/jmap';
+ import type { Schema } from '@/types/schema';
+ 
+@@ -33,6 +35,15 @@ export function getAccountId(objectType: string): string {
+ }
+ 
+ export async function jmapRequest(methodCalls: JmapMethodCall[], signal?: AbortSignal): Promise<JmapMethodResponse[]> {
++  // inWorkspace: traces are kept by the inWorkspace Console, which answers these calls as the
++  // Enterprise server would.
++  if (isTraceRequest(methodCalls.map(([name]) => name))) {
++    const startedAt = performance.now();
++    const methodResponses = await traceJmap(methodCalls, signal);
++    logJmapExchange(methodCalls, methodResponses, performance.now() - startedAt);
++    return methodResponses;
++  }
++
+   const { apiUrl } = useAuthStore.getState();
+   let path = apiUrl || '/jmap';
+   if (path.startsWith('http://') || path.startsWith('https://')) {

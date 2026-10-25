@@ -2,6 +2,7 @@ node_modules
 .next
 ui-dist
 e2e
+webadmin
 docs
 *.md
 .env*

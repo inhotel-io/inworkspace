@@ -7,8 +7,11 @@ const deps: ApiRouteDeps = {
   enabled: () => servesApi(getConfig()),
   allowedOrigin: () => new URL(getConfig().jmapUrl).origin,
   verify: (headers) => operatorVerifier()(headers),
+  permission: () => getConfig().operatorPermission,
   log: (entry) => console.log(JSON.stringify(entry)),
 };
 
 export const apiRoute = createApiRoute(deps);
 export const apiPreflight = createPreflight(deps);
+/** For routes that take a JSON body. */
+export const apiBodyPreflight = createPreflight(deps, true);

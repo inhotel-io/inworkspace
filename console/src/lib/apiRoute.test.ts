@@ -7,11 +7,17 @@ const SERVER = "https://mail.example.com";
 
 function depsWith(verify: (headers: Headers) => Promise<Operator>, enabled = true) {
   const logged: Record<string, unknown>[] = [];
-  const deps: ApiRouteDeps = { enabled: () => enabled, allowedOrigin: () => SERVER, verify, log: (entry) => logged.push(entry) };
+  const deps: ApiRouteDeps = {
+    enabled: () => enabled,
+    allowedOrigin: () => SERVER,
+    verify,
+    permission: () => "impersonate",
+    log: (entry) => logged.push(entry),
+  };
   return { deps, logged };
 }
 
-const admin = async () => ({ login: "admin" });
+const admin = async (): Promise<Operator> => ({ login: "admin", permissions: new Set(["impersonate", "liveMetrics"]) });
 const context = { params: Promise.resolve({ address: "a1@agents.example.com" }) };
 
 function request(path = "/api/v1/me", origin: string | null = SERVER): Request {
@@ -27,6 +33,24 @@ describe("createApiRoute", () => {
     expect(await response.json()).toEqual({ who: "admin", address: "a1@agents.example.com" });
     expect(response.headers.get("access-control-allow-origin")).toBe(SERVER);
     expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("requires the operator permission, or the route's own permissions", async () => {
+    const viewer = async (): Promise<Operator> => ({ login: "jane@example.com", permissions: new Set(["liveMetrics"]) });
+    let ran = 0;
+    const handler = async () => {
+      ran += 1;
+      return {};
+    };
+    const refused = await createApiRoute(depsWith(viewer).deps)(handler)(request(), context);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: { code: "forbidden", message: "jane@example.com does not have the impersonate permission" } });
+    expect(ran).toBe(0);
+    const allowed = await createApiRoute(depsWith(viewer).deps)(handler, { permissions: ["liveMetrics"] })(request(), context);
+    expect(allowed.status).toBe(200);
+    const stricter = await createApiRoute(depsWith(admin).deps)(handler, { permissions: ["liveMetrics", "liveTracing"] })(request(), context);
+    expect(stricter.status).toBe(403);
+    expect(ran).toBe(1);
   });
 
   it("is a 404 outside the api role, before any check", async () => {

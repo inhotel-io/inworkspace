@@ -2,7 +2,8 @@ name: inworkspace-console-e2e
 
 services:
   stalwart:
-    image: stalwartlabs/stalwart:v0.16.16
+    # e2e/insights.mjs runs the version a deployment runs (E2E_STALWART_TAG).
+    image: stalwartlabs/stalwart:${E2E_STALWART_TAG:-v0.16.16}
     environment:
       STALWART_RECOVERY_ADMIN: "admin:${E2E_ADMIN_SECRET:?set by e2e/run.mjs}"
       STALWART_HOSTNAME: mail.example.test

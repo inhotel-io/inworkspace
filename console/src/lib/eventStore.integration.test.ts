@@ -23,8 +23,8 @@ function ingest(type: string, accountId: number, at: string): EventRow {
 }
 
 beforeAll(async () => {
-  await pool.query("drop table if exists events, schema_migrations");
-  expect(await migrate(pool)).toEqual(["001_events", "002_events_account"]);
+  await pool.query("drop table if exists events, metric_samples, metric_series, trace_events, delivery_traces, schema_migrations");
+  expect(await migrate(pool)).toEqual(["001_events", "002_events_account", "003_metrics", "004_traces"]);
 });
 
 beforeEach(async () => {

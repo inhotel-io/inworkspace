@@ -44,3 +44,6 @@ jobs:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/console_test
       - run: npm run build
       - run: npm run e2e
+      # The web admin's Dashboard, Live Tracing and History against the server version a
+      # deployment runs; builds the patched web admin in Docker first.
+      - run: npm run e2e:insights

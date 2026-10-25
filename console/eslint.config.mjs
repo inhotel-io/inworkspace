@@ -25,6 +25,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // The built web app.
     "ui-dist/**",
+    // The web admin patch set: files for the web UI's own tree, linted there when it is built.
+    "webadmin/**",
   ]),
 ]);
 
