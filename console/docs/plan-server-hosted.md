@@ -1263,10 +1263,10 @@ export interface ApiContext<P> {
   params: P;
 }
 
-type Headers_ = Record<string, string>;
+type HeaderMap = Record<string, string>;
 
-function errorResponse(error: unknown, cors: Headers_, log: ApiRouteDeps["log"]): Response {
-  const send = (status: number, code: ApiErrorCode, message: string, extra: Headers_ = {}) =>
+function errorResponse(error: unknown, cors: HeaderMap, log: ApiRouteDeps["log"]): Response {
+  const send = (status: number, code: ApiErrorCode, message: string, extra: HeaderMap = {}) =>
     Response.json({ error: { code, message } } satisfies ApiErrorBody, {
       status,
       headers: { ...cors, "Cache-Control": "no-store", ...extra },
