@@ -4,6 +4,11 @@ Status: approved for implementation, 2026-10-25. Revised the same day after a sp
 a real server (v0.16.16): event types, the event table and the overview counts now follow
 what the server actually emits.
 
+Revised on 2026-10-26 (issue #8). The inWorkspace server now serves the console itself, at
+`/console` next to its web admin, and operators sign in with their mail-server account. The
+console service is now an API, and the Google identity modes and server-rendered pages are
+gone.
+
 ## Purpose
 
 AI agents can work through ordinary inWorkspace mailboxes: guests and partners email an
@@ -12,7 +17,9 @@ submitted from the same mailbox and filed in its Sent folder. The people respons
 those agents need to see what the agents receive, what they answer, and what the mail
 server is doing with that mail.
 
-The console is a read-only web application for that oversight. It shows:
+The console is a read-only web application for that oversight. The inWorkspace server
+serves it at `/console`, so operators find it on the same site as the web admin and sign
+in with the same account. It shows:
 
 - **Conversations** — each agent's threads with its counterparts, read live from the
   agent's mailboxes, including what landed in Junk and which threads still await a reply.
@@ -26,8 +33,8 @@ mailboxes. A deployment is configuration only.
 ## Scope
 
 In scope: the three views above, an ingest endpoint for the server's event webhook, an
-event store with retention, access control in front of the web views, and an audit log of
-who viewed which conversation.
+event store with retention, sign-in with the server's own accounts, and an audit log of who
+viewed which conversation.
 
 Out of scope for this version:
 
@@ -43,26 +50,37 @@ Out of scope for this version:
 ## Architecture
 
 ```text
-counterpart ──SMTP──▶ inWorkspace server ──event webhook (HMAC-signed)──▶ console (ingest role)
-                          ▲    agent mailboxes                                     │
-                          │                                                        ▼
-                          └──── JMAP, read-only methods ──── console (web role) ◀── Postgres
-operator ──identity-aware proxy──▶ console (web role)
+operator's browser ──▶ inWorkspace server: /console (the web app), /login and /auth/token (sign-in)
+operator's browser ──bearer token──▶ console, api role ──▶ Postgres
+                                       └── token introspection, JMAP read-only ──▶ inWorkspace server
+inWorkspace server ──event webhook (HMAC-signed)──▶ console, ingest role ──▶ Postgres
 ```
+
+The **web app** is a static bundle of HTML, JavaScript and CSS, built from `ui/` with Vite,
+React, React Router and Tailwind CSS.
+- The server hosts it as one of its web applications, the same mechanism that serves the web
+  admin at `/admin`.
+- The server downloads the bundle as a zip from a URL, keeps it in its blob store, and serves
+  its files under a path prefix. Unknown paths get `index.html`, whose `<base href="/">` the
+  server rewrites to the prefix. The app is built with relative asset paths, so it works under
+  any prefix. `/console` is the default.
+- Because the server serves the app, the app signs in against its own origin.
 
 One container image runs in one of two roles, chosen by `CONSOLE_ROLE`:
 
-- **ingest** serves only `POST /api/ingest/events` and `GET /healthz`. It must be reachable
-  from the mail server, holds the webhook signing key and database credentials, and holds
-  no JMAP credentials.
-- **web** serves the pages and their JSON endpoints. It sits behind an identity-aware proxy,
-  holds the JMAP credentials and database credentials, and never accepts webhook posts.
+- **api** serves the JSON API under `/api/v1/`, and the web app's bundle under `/ui/`.
+  - Browsers call it from the server's origin, so it is publicly reachable.
+  - Every API request must carry the operator's bearer token.
+  - It holds the JMAP and database credentials, and never accepts webhook posts.
+- **ingest** serves only `POST /api/ingest/events` and `GET /healthz`.
+  - It must be reachable from the mail server.
+  - It holds the webhook signing key and the database credentials, and no JMAP credentials.
 
 `CONSOLE_ROLE=all` runs both in one process for local development.
 
-The application is TypeScript on Next.js 16 (App Router, Cache Components), rendered on the
-server. Every call to the mail server and the database happens on the server; the browser
-never sees a credential. Postgres is the only state.
+The service is TypeScript on Next.js 16, with route handlers only. Every call to the mail
+server's mailboxes and to the database happens in the service. The browser holds only the
+operator's own tokens. Postgres is the only state.
 
 ## Components
 
@@ -81,9 +99,23 @@ Each unit has one purpose and is tested on its own.
 | `directory` | The agent mailboxes: accounts whose address is an agent address, with display names. Cached for five minutes. | `jmap` |
 | `conversations` | Build thread summaries and thread views from JMAP results: direction of each message, junk, automated and awaiting-reply flags. | — |
 | `mailbox` | Read one agent's mailbox through `jmap` and hand the results to `conversations`. | `jmap`, `conversations`, `sanitize` |
-| `sanitize` | Turn an HTML email body into safe markup, plain text, and a sandboxed document. | — |
-| `auth` | Resolve the signed-in operator from the proxy's signed assertion and check the allow-list. | `config` |
+| `sanitize` | Turn an HTML email body into safe markup and plain text. | — |
+| `emailDocument` | Wrap sanitized markup in a document for a sandboxed frame, with a policy that blocks every remote resource. Shared with the web app. | — |
+| `auth` | Verify the operator's bearer token with the server: introspection, permissions and login. Check the required permission and the allow-list, and cache the result. | `config` |
+| `cors` | Cross-origin headers for the server's origin, and preflight answers. | — |
+| `apiRoute` | Wrap every API handler: role check, CORS, authentication, JSON errors, `no-store`. | `auth`, `cors` |
+| `uiBundle` | Turn the built web app into the zip the server downloads. It writes the runtime settings into `index.html` and gives the bundle a version. | `config` |
 | `audit` | Write one structured log line for each conversation or thread view. | — |
+
+The web app has its own units, all under `ui/src/`:
+
+| Unit | Responsibility |
+| --- | --- |
+| `auth/pkce` | Code verifier, S256 challenge and state, from the browser's random source. |
+| `auth/session` | Start sign-in, finish it on the callback, and keep the tokens for the tab. Refresh the access token, and sign out. |
+| `api` | Call the console API with the access token. On 401, refresh once and retry, else sign in again. |
+| `settings` | Read the runtime settings the bundle carries in `index.html`, and the base path. |
+| pages and components | Overview, an agent's conversations, a thread, events, sign-in states. |
 
 ## Event ingest
 
@@ -226,9 +258,9 @@ keywords, so no message becomes seen.
   that was never sent, and a message in Trash is marked as such. Attachments are listed by
   name and size; they are not downloadable in this version.
 
-HTML bodies are sanitized on the server and rendered in an `iframe` with an empty `sandbox`
-attribute (no scripts, no same-origin) whose document carries a content security policy
-that blocks every remote resource, so tracking pixels never load.
+HTML bodies are sanitized by the API. The web app renders them in an `iframe` with an empty
+`sandbox` attribute (no scripts, no same-origin), whose document carries a content security
+policy that blocks every remote resource, so tracking pixels never load.
 
 ## Overview
 
@@ -252,58 +284,117 @@ instead of zero, next to an error panel.
 ## Events view
 
 A table of events, newest first, filtered by type prefix, severity, agent and time window,
-100 per page, with keyset paging. A live mode polls `GET /api/events?after=<id>` every three
-seconds and prepends new rows. Each row expands to its full JSON.
+100 per page, with keyset paging. A live mode polls `GET /api/v1/events?after=<id>` every
+three seconds and prepends new rows. Each row expands to its full JSON.
 
-## Access control and privacy
+## API
 
-- Every request to the web role passes a gate (`proxy.ts`) that trusts only the identity
-  the platform verified, then checks the email against `ALLOWED_EMAILS` and
-  `ALLOWED_DOMAINS`, and answers 403 otherwise. Every page and API route repeats the check
-  before it reads data.
-  - With `AUTH_MODE=iap` the gate verifies the `x-goog-iap-jwt-assertion` JWT against
-    Google's public keys and the configured audience.
-  - With `AUTH_MODE=cloud-run` the service is private, and Cloud Run's IAM check verifies the
-    caller's Google ID token. Cloud Run forwards the token with its signature replaced by
-    `SIGNATURE_REMOVED_BY_GOOGLE`, so the gate reads the email only from such tokens. It also
-    requires a Google issuer, an unexpired token and a verified email.
-  - The token is read from `X-Serverless-Authorization` when present, else from
-    `Authorization`. Cloud Run authenticates with the former when both are sent and passes the
-    latter through unchecked.
-  - Because `cloud-run` mode trusts Cloud Run's check, the web role reads its own service and
-    IAM policy at startup and every five minutes. It refuses to start, or exits, when
-    `allUsers` or `allAuthenticatedUsers` may invoke it, or when the invoker check is
-    disabled. This mode exists because IAP's Google-managed OAuth client needs the project
-    to be in an organization. Operators reach the service with
-    `gcloud run services proxy`.
-- `AUTH_MODE=none` is for local development. It is refused when `NODE_ENV=production`
-  unless `ALLOW_INSECURE_AUTH_NONE=1` is also set, which only local end-to-end runs do.
-- Every conversation and thread view writes an audit line: operator, agent, thread id,
-  time.
-- Message bodies are never stored by the console. Event rows hold addresses, IPs and ids,
-  and expire with retention.
-- Responses carry a content security policy that blocks remote scripts, styles, images and
-  framing, plus `Referrer-Policy: no-referrer`; data responses are `Cache-Control:
-  no-store`.
+Every endpoint is `GET` under `/api/v1/`, answers JSON with `Cache-Control: no-store`, and
+needs a verified operator.
+
+| Path | Answer |
+| --- | --- |
+| `me` | The operator's login. |
+| `overview` | The 24-hour counts, the agents with their activity (or the directory error), and the 20 latest errors. |
+| `agents` | The agent directory: address and name. |
+| `agents/{address}/threads?position=` | One page of the agent's threads. 404 for an address outside the directory. |
+| `agents/{address}/threads/{threadId}` | Every message of the thread. 404 when the thread is not in that mailbox. |
+| `events?type=&severity=&agent=&window=&before=&after=` | Events, newest first. `before` pages back, `after` returns only newer events for live mode. |
+
+Errors are `{"error": {"code", "message"}}`:
+
+| Status | Meaning |
+| --- | --- |
+| 400 | A bad parameter. |
+| 401 | Sign-in needed, or the token is expired or invalid. |
+| 403 | The account may not use the console. |
+| 404 | An unknown agent or thread. |
+| 429 | Too many token checks. |
+| 502 | A mailbox read failed at the server. |
+| 503 | The server could not check the token. |
+
+`GET /ui/manifest` names the current bundle. `GET /ui/console-<version>.zip` returns it, and
+any version name returns the current bundle, so the server never gets a 404 when it fetches
+again.
+
+## Sign-in and access control
+
+**Sign-in** happens entirely at the server. Setup registers a public OAuth client,
+`inworkspace-console` by default, whose only redirect URI is `<server>/console/oauth/callback`.
+1. The web app redirects to the server's `/login` with that client id, a PKCE S256 challenge
+   and a random state.
+2. The server's own sign-in page asks for the password, and MFA when the account has it, then
+   returns to the callback with a code.
+3. The app checks the state and exchanges the code at `/auth/token`.
+4. It keeps the access and refresh tokens in `sessionStorage`, so they belong to one tab and
+   go when the tab closes.
+5. It refreshes the access token when it expires. By default an access token lasts one hour
+   and a refresh token 30 days.
+
+Signing out discards the tokens. A token the API has already verified stays usable there for
+at most the 60-second cache described below.
+
+**Every API request** carries `Authorization: Bearer <access token>`. The api role:
+
+1. accepts only a well-formed bearer token: at most 1,000 characters of token characters.
+   Anything else is 401.
+2. answers from a cache of verified tokens, keyed by the token's SHA-256 and kept for 60
+   seconds, or less when the token expires sooner.
+3. otherwise checks the token by introspection, `POST /auth/introspect` at the server.
+   - It authenticates as the console principal, so an invalid or expired token is never
+     presented to the server as a failed login. The server's authentication ban therefore
+     cannot be turned against the API's own address.
+   - Introspection is limited to 120 per minute per instance; beyond that the API answers
+     429. Cached tokens are not affected.
+4. for an active token, reads the account's permissions from `GET /api/account` and its login
+   from `GET /jmap/session`, both with the operator's token.
+5. requires the permission `OPERATOR_PERMISSION`, `impersonate` by default, and, when
+   `ALLOWED_ACCOUNTS` is set, a login on that list. Otherwise it answers 403.
+   - The default admits only accounts that could already read any mailbox through
+     impersonation, so the console gives nobody new access.
+   - The server's built-in recovery administrator has every permission.
+
+**Cross-origin access.** API responses allow exactly the server's origin, taken from
+`JMAP_URL`.
+- They allow the method `GET` and the header `Authorization`; preflights are cached for ten
+  minutes.
+- No cookies are used, so cross-site request forgery does not apply.
+
+**The web app's page** carries a content security policy in a meta tag.
+- Scripts and styles come only from its own origin, API calls go only to the console API, and
+  images are only inline.
+- Email frames inherit that policy and add their own.
+
+**Other controls.**
+- `AUTH_MODE=none` is for local development only. It is refused when
+  `NODE_ENV=production` unless `ALLOW_INSECURE_AUTH_NONE=1` is also set.
+- Every conversation and thread view writes an audit line: the operator's login, the agent,
+  the thread id and the time.
+- The console never stores message bodies. Event rows hold addresses, IPs and ids, and
+  expire with retention.
+- API responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and
+  `Cache-Control: no-store`.
 
 ## Configuration
 
 | Variable | Role | Meaning |
 | --- | --- | --- |
-| `CONSOLE_ROLE` | both | `web`, `ingest` or `all`. |
+| `CONSOLE_ROLE` | both | `api`, `ingest` or `all`. |
 | `DATABASE_URL` | both | Postgres connection string. |
 | `WEBHOOK_SIGNING_KEY` | ingest | Shared HMAC key, at least 32 characters; must match the server's webhook. |
 | `EVENT_RETENTION_DAYS` | ingest | Days to keep events; default 30. |
-| `JMAP_URL` | web | Base URL of the inWorkspace server, such as `https://mail.example.com`. |
-| `JMAP_PRINCIPAL` | web | Login of the console principal. |
-| `JMAP_PRINCIPAL_SECRET` | web | Its password. |
-| `AGENT_DOMAINS` | web | Comma-separated domains whose accounts are agent mailboxes. |
-| `AGENT_LOCALPART_PATTERN` | web | Optional regular expression the whole local part must match. |
-| `AUTH_MODE` | web | `iap`, `cloud-run` or `none`. |
-| `IAP_AUDIENCE` | web | Expected audience of the proxy assertion. |
-| `IAP_JWKS_URL` | web | Key set for the assertion; defaults to Google's IAP keys. |
-| `ALLOWED_EMAILS`, `ALLOWED_DOMAINS` | web | Who may use the console once signed in. |
-| `DISPLAY_TIME_ZONE` | web | IANA time zone for displayed times; default `UTC`. |
+| `JMAP_URL` | api | Origin of the inWorkspace server, such as `https://mail.example.com`. The web app runs on it. |
+| `JMAP_PRINCIPAL` | api | Login of the console principal. |
+| `JMAP_PRINCIPAL_SECRET` | api | Its password. |
+| `AGENT_DOMAINS` | api | Comma-separated domains whose accounts are agent mailboxes. |
+| `AGENT_LOCALPART_PATTERN` | api | Optional regular expression the whole local part must match. |
+| `PUBLIC_URL` | api | Origin at which browsers reach the api role, such as `https://console-api.example.com`. |
+| `AUTH_MODE` | api | `server` (default) or `none`. |
+| `OPERATOR_PERMISSION` | api | The server permission an operator needs; default `impersonate`. |
+| `ALLOWED_ACCOUNTS` | api | Optional comma-separated logins that may use the console. |
+| `OAUTH_CLIENT_ID` | api | The client id the web app signs in with; default `inworkspace-console`. |
+| `DISPLAY_TIME_ZONE` | api | Optional IANA time zone for displayed times; default: the browser's. |
+| `UI_DIST_DIR` | api | Directory of the built web app; default `ui-dist`. |
 
 ## Server setup
 
@@ -315,7 +406,16 @@ does the same idempotently — :
    permissions and a long random password;
 2. creates a webhook pointing at `<ingest URL>/api/ingest/events`, with the signing key,
    level `info`, and the 39 subscribed types as an include list;
-3. reloads settings. Some server versions fail to reload because of an unrelated default
+3. registers the public OAuth client, with no secret and the single redirect URI
+   `<server>/console/oauth/callback`;
+4. registers the web application at `/console`. The bundle URL is the api role's
+   `/ui/manifest` answer, fetched through the address the server uses to reach the api role.
+   - The server keeps one downloaded bundle per application record, so a new version gets a
+     new record: the script creates it first, then deletes the old one.
+   - Creating or deleting a record makes the server reload its web applications from their
+     stored bundles. The web admin is not downloaded again.
+   - The script only touches records whose prefix is the console's.
+5. reloads settings. Some server versions fail to reload because of an unrelated default
    setting; the webhook then becomes active at the next restart.
 
 ## Error handling
@@ -323,28 +423,46 @@ does the same idempotently — :
 - Ingest: 413 oversize, 401 bad signature, 400 malformed batch, 503 database unavailable,
   204 success. Every rejection is logged with its size or reason, never the body; rows
   Postgres refuses are logged and skipped.
-- Web: a failed JMAP call renders an error state in the affected panel with the server's
-  error type, and the rest of the page still renders. An unauthorized operator gets 403
-  from the gate; an unknown agent or thread renders the not-found page (inside a streamed
-  boundary, so the status stays 200) and no mailbox is opened.
-- Startup fails when configuration is invalid or migrations cannot be applied.
+- API: the statuses listed under [API](#api). A failed JMAP call is a 502 for that request
+  only. The overview still answers when the directory fails, with the error in place of the
+  agent list. An unknown agent or thread is a 404, and no mailbox is opened.
+- Web app:
+  - A failed request shows an error panel where its data would be, and the rest of the
+    page still renders.
+  - A 401 refreshes the access token once and retries, then starts sign-in again.
+  - A 403 explains which permission the account lacks, and offers to sign out.
+- Startup fails when the configuration is invalid, the migrations cannot be applied, or (in
+  the api role) the built web app is missing.
 
 ## Testing
 
-- Unit tests (Vitest) for `config`, `json`, `signature`, `eventTypes`, `normalize`,
-  `ingest`, `jmap`, `directory`, `conversations`, `mailbox`, `sanitize` and `auth`, using
-  event payloads and JMAP responses captured from a real server.
+- Unit tests (Vitest), using event payloads and JMAP responses captured from a real server:
+  - for `config`, `json`, `signature`, `eventTypes`, `normalize`, `ingest`, `jmap`,
+    `directory`, `conversations`, `mailbox` and `sanitize`;
+  - for `auth`, `cors`, `apiRoute` and `uiBundle`;
+  - for the web app's `auth/pkce`, `auth/session`, `api` and `settings`.
 - Integration tests for `eventStore` against a real Postgres: migrations, dedupe, filters,
   counts, retention.
-- An end-to-end run against a real inWorkspace server in Docker: create two agent
-  mailboxes, a runtime principal, the console principal and the webhook; send messages over
-  SMTP and reply from an agent mailbox over JMAP; then confirm the events arrive and the
-  conversation renders with an inbound and an outbound message.
+- An end-to-end run against a real inWorkspace server in Docker:
+  1. Create two agent mailboxes, a runtime principal, a plain user, the console principal
+     and the webhook.
+  2. Register the OAuth client and the web application.
+  3. Send messages over SMTP and reply from an agent mailbox over JMAP.
+  4. Confirm that the server serves the web app at `/console`.
+  5. Sign in as the recovery administrator through the server's real `/api/auth` and
+     `/auth/token` endpoints.
+  6. Confirm that the API returns the conversation with an inbound and an outbound message,
+     and the events.
+  7. Confirm that the API refuses a missing or invalid token with 401 and the plain user with
+     403, and answers preflights only for the server's origin.
 
 ## Deployment
 
 Any container platform works. The reference deployment is two Google Cloud Run services
-from the same image — the web role with Identity-Aware Proxy enabled, the ingest role
-publicly reachable and protected by the signature — sharing a Postgres database, with all
-secrets supplied as environment variables from a secret manager. Organization-specific
-values never belong in this repository.
+from the same image, sharing a Postgres database:
+- The api role is publicly reachable; every API request needs a bearer token.
+- The ingest role is publicly reachable and protected by the signature.
+
+All secrets are supplied as environment variables from a secret manager. After deploying the
+api role, run the setup script so the server fetches the new bundle.
+Organization-specific values never belong in this repository.
