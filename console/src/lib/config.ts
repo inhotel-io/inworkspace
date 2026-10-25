@@ -7,7 +7,13 @@ export interface ConsoleConfig {
   /** Ingest role only; empty otherwise. */
   webhookSigningKey: string;
   retentionDays: number;
-  /** API role only; empty otherwise. */
+  /** Ingest role: the bearer token of the server's OpenTelemetry metrics push; empty turns that endpoint off. */
+  metricsPushToken: string;
+  metricRetentionDays: number;
+  traceRetentionDays: number;
+  /** Ingest role: the app password that may count the delivery queue; null leaves the queue's size out. */
+  queueReader: { login: string; secret: string } | null;
+  /** The server's origin. API role, and the ingest role when it counts the queue; empty otherwise. */
   jmapUrl: string;
   jmapPrincipal: string;
   jmapPrincipalSecret: string;
@@ -98,6 +104,10 @@ export function parseConfig(env: Env): ConsoleConfig {
 
   let webhookSigningKey = "";
   let retentionDays = 30;
+  let metricsPushToken = "";
+  let metricRetentionDays = 90;
+  let traceRetentionDays = 30;
+  let queueReader: ConsoleConfig["queueReader"] = null;
   if (servesIngest({ role })) {
     webhookSigningKey = need("WEBHOOK_SIGNING_KEY");
     if (webhookSigningKey && webhookSigningKey.length < 32) {
@@ -110,9 +120,20 @@ export function parseConfig(env: Env): ConsoleConfig {
         problems.push("EVENT_RETENTION_DAYS must be a positive integer");
       }
     }
+    metricsPushToken = text(env, "METRICS_PUSH_TOKEN");
+    if (metricsPushToken && !/^[A-Za-z0-9._~+/=-]{32,256}$/.test(metricsPushToken)) {
+      problems.push("METRICS_PUSH_TOKEN must be 32 to 256 token characters");
+    }
+    metricRetentionDays = whole("METRIC_RETENTION_DAYS", 90, 1, 3650, "METRIC_RETENTION_DAYS must be a whole number of days from 1 to 3650");
+    traceRetentionDays = whole("TRACE_RETENTION_DAYS", 30, 1, 3650, "TRACE_RETENTION_DAYS must be a whole number of days from 1 to 3650");
+    const login = text(env, "QUEUE_READER_LOGIN").toLowerCase();
+    const secret = text(env, "QUEUE_READER_SECRET");
+    if (login && secret) queueReader = { login, secret };
+    else if (login || secret) problems.push("QUEUE_READER_LOGIN and QUEUE_READER_SECRET go together");
   }
 
   let jmapUrl = "";
+  if (queueReader && !servesApi({ role })) jmapUrl = origin("JMAP_URL", "https://mail.example.com");
   let jmapPrincipal = "";
   let jmapPrincipalSecret = "";
   let agentDomains: string[] = [];
@@ -188,6 +209,10 @@ export function parseConfig(env: Env): ConsoleConfig {
     databaseUrl,
     webhookSigningKey,
     retentionDays,
+    metricsPushToken,
+    metricRetentionDays,
+    traceRetentionDays,
+    queueReader,
     jmapUrl,
     jmapPrincipal,
     jmapPrincipalSecret,

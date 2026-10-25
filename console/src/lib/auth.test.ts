@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { AuthError, RateLimitError, VerifierUnavailableError, bearerToken, createTokenVerifier, forwardedClient } from "./auth";
+import {
+  AuthError,
+  LOCAL_OPERATOR,
+  RateLimitError,
+  VerifierUnavailableError,
+  bearerToken,
+  createTokenVerifier,
+  forwardedClient,
+  requirePermissions,
+} from "./auth";
 
 const NOW = Date.parse("2026-10-26T10:00:00Z");
 const SERVER = "https://mail.example.com";
@@ -85,7 +94,6 @@ function verifierFor(
   return createTokenVerifier({
     serverUrl: SERVER,
     principal: PRINCIPAL,
-    permission: "impersonate",
     allowedAccounts: extra.allowedAccounts ?? [],
     introspectionsPerMinute: extra.perMinute,
     introspectionsPerClientPerMinute: extra.perClientPerMinute,
@@ -143,7 +151,7 @@ describe("forwardedClient", () => {
 describe("createTokenVerifier", () => {
   it("accepts an active access token from an account with the permission", async () => {
     const server = fakeServer();
-    await expect(verifierFor(server)(bearer())).resolves.toEqual({ login: "admin" });
+    await expect(verifierFor(server)(bearer())).resolves.toMatchObject({ login: "admin" });
     expect(server.calls.map((call) => call.path)).toEqual(["/auth/introspect", "/api/account", "/jmap/session"]);
   });
 
@@ -161,7 +169,7 @@ describe("createTokenVerifier", () => {
     const server = fakeServer();
     const verify = verifierFor(server);
     const operators = await Promise.all([verify(bearer()), verify(bearer()), verify(bearer())]);
-    expect(operators).toEqual([{ login: "admin" }, { login: "admin" }, { login: "admin" }]);
+    expect(operators.map((operator) => operator.login)).toEqual(["admin", "admin", "admin"]);
     expect(server.calls).toHaveLength(3);
     expect(server.maxInFlight()).toBe(1);
   });
@@ -184,12 +192,15 @@ describe("createTokenVerifier", () => {
     await expect(verifierFor(fakeServer({ omitLifetime: true }))(bearer())).rejects.toBeInstanceOf(VerifierUnavailableError);
   });
 
-  it("refuses an account without the permission with 403, and remembers it", async () => {
-    const server = fakeServer({ permissions: ["authenticate"], username: "Jane@Example.com" });
-    const verify = verifierFor(server);
-    await expect(verify(bearer())).rejects.toMatchObject({ status: 403, message: "jane@example.com does not have the impersonate permission" });
-    await expect(verify(bearer())).rejects.toMatchObject({ status: 403 });
-    expect(server.calls).toHaveLength(3);
+  it("returns the account's permissions, for each route to check", async () => {
+    const server = fakeServer({ permissions: ["authenticate", "liveMetrics"], username: "Jane@Example.com" });
+    const operator = await verifierFor(server)(bearer());
+    expect(operator).toEqual({ login: "jane@example.com", permissions: new Set(["authenticate", "liveMetrics"]) });
+    expect(() => requirePermissions(operator, ["liveMetrics"])).not.toThrow();
+    expect(() => requirePermissions(operator, ["liveMetrics", "impersonate"])).toThrow(
+      expect.objectContaining({ status: 403, message: "jane@example.com does not have the impersonate permission" }),
+    );
+    expect(() => requirePermissions(LOCAL_OPERATOR, ["impersonate"])).not.toThrow();
   });
 
   it("applies the allow-list when one is set", async () => {
@@ -197,7 +208,7 @@ describe("createTokenVerifier", () => {
       status: 403,
       message: "admin is not allowed to use the console",
     });
-    await expect(verifierFor(fakeServer(), undefined, { allowedAccounts: ["admin"] })(bearer())).resolves.toEqual({ login: "admin" });
+    await expect(verifierFor(fakeServer(), undefined, { allowedAccounts: ["admin"] })(bearer())).resolves.toMatchObject({ login: "admin" });
   });
 
   it("answers from its cache for a minute", async () => {
@@ -230,9 +241,9 @@ describe("createTokenVerifier", () => {
     await verify(bearer("sw1.token-one-xxxxxxxx"));
     await verify(bearer("sw1.token-two-xxxxxxxx"));
     await expect(verify(bearer("sw1.token-three-xxxxxx"))).rejects.toBeInstanceOf(RateLimitError);
-    await expect(verify(bearer("sw1.token-one-xxxxxxxx"))).resolves.toEqual({ login: "admin" });
+    await expect(verify(bearer("sw1.token-one-xxxxxxxx"))).resolves.toMatchObject({ login: "admin" });
     clock.now += 60_000;
-    await expect(verify(bearer("sw1.token-three-xxxxxx"))).resolves.toEqual({ login: "admin" });
+    await expect(verify(bearer("sw1.token-three-xxxxxx"))).resolves.toMatchObject({ login: "admin" });
   });
 
   it("limits each client separately, so one client cannot use up the budget", async () => {
@@ -246,13 +257,13 @@ describe("createTokenVerifier", () => {
 
   it("retries once when the operator's account is at its limit of concurrent requests", async () => {
     const server = fakeServer({ accountStatuses: ["limit", 200] });
-    await expect(verifierFor(server)(bearer())).resolves.toEqual({ login: "admin" });
+    await expect(verifierFor(server)(bearer())).resolves.toMatchObject({ login: "admin" });
     expect(server.calls.filter((call) => call.path === "/api/account")).toHaveLength(2);
   });
 
   it("retries an introspection once when the principal is at its limit of concurrent requests", async () => {
     const server = fakeServer({ introspectAtLimit: 1 });
-    await expect(verifierFor(server)(bearer())).resolves.toEqual({ login: "admin" });
+    await expect(verifierFor(server)(bearer())).resolves.toMatchObject({ login: "admin" });
     expect(server.calls.filter((call) => call.path === "/auth/introspect")).toHaveLength(2);
   });
 
@@ -262,10 +273,10 @@ describe("createTokenVerifier", () => {
     const verify = verifierFor(server, clock, { perMinute: 1, perClientPerMinute: 1 });
     await verify(bearer(TOKEN, "203.0.113.9"));
     clock.now += 61_000;
-    await expect(verify(bearer(TOKEN, "203.0.113.9"))).resolves.toEqual({ login: "admin" });
+    await expect(verify(bearer(TOKEN, "203.0.113.9"))).resolves.toMatchObject({ login: "admin" });
     clock.now += 61_000;
-    await expect(verify(bearer(TOKEN, "203.0.113.9"))).resolves.toEqual({ login: "admin" });
-    await expect(verify(bearer("sw1.a-new-session-xxxx", "203.0.113.9"))).resolves.toEqual({ login: "admin" });
+    await expect(verify(bearer(TOKEN, "203.0.113.9"))).resolves.toMatchObject({ login: "admin" });
+    await expect(verify(bearer("sw1.a-new-session-xxxx", "203.0.113.9"))).resolves.toMatchObject({ login: "admin" });
   });
 
   it("reports a server it cannot ask, or cannot understand, as unavailable", async () => {

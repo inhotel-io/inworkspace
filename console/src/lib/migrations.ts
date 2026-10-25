@@ -39,6 +39,60 @@ export const MIGRATIONS: readonly Migration[] = [
       create index events_account_idx on events (account_id, event_at desc) where account_id is not null;
     `,
   },
+  {
+    // The server's metrics, as the web admin's dashboards read them (see metricSamples.ts).
+    version: "003_metrics",
+    sql: `
+      create table metric_samples (
+        metric text             not null,
+        at     timestamptz      not null,
+        kind   text             not null check (kind in ('counter', 'gauge', 'histogram')),
+        count  double precision not null,
+        sum    double precision,
+        primary key (metric, at)
+      );
+      create index metric_samples_at_idx on metric_samples (at);
+      create table metric_series (
+        metric      text             primary key,
+        kind        text             not null check (kind in ('counter', 'histogram')),
+        start_ns    text             not null,
+        count       double precision not null,
+        sum         double precision not null,
+        total_count double precision not null,
+        total_sum   double precision not null,
+        updated_at  timestamptz      not null default now()
+      );
+    `,
+  },
+  {
+    // Every event the tracing webhook sends, and the delivery traces grouped from them by span.
+    version: "004_traces",
+    sql: `
+      create table trace_events (
+        id          bigserial   primary key,
+        dedupe_hash bytea       not null unique,
+        event_at    timestamptz not null,
+        received_at timestamptz not null default now(),
+        type        text        not null,
+        span_id     text,
+        data        jsonb       not null
+      );
+      create index trace_events_event_at_idx on trace_events (event_at);
+      create index trace_events_span_idx on trace_events (span_id, event_at) where span_id is not null;
+      create table delivery_traces (
+        span_id    text        primary key,
+        kind       text        not null,
+        started_at timestamptz not null,
+        sender     text,
+        recipients text[]      not null default '{}',
+        size       bigint,
+        queue_ids  text[]      not null default '{}',
+        remote_ip  text,
+        search     text        not null default ''
+      );
+      create index delivery_traces_kind_idx on delivery_traces (kind, started_at desc, span_id desc);
+    `,
+  },
 ];
 
 const MIGRATION_LOCK = 7_302_025;

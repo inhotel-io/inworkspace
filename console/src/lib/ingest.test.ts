@@ -1,14 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createIngestHandler, MAX_INGEST_BYTES, type IngestDeps } from "./ingest";
-import type { EventRow } from "./normalize";
+import { normalizeEvent, type EventRow } from "./normalize";
 import { signBody } from "./signature";
 
 const KEY = "test-signing-key-0123456789abcdef0123456789";
 const BODY = '{"events":[{"type":"message-ingest.ham","createdAt":"2026-10-25T11:20:29Z","data":{"to":["a@agents.example.test"]}}]}';
 
-function deps(overrides: Partial<IngestDeps> = {}): IngestDeps {
+function deps(overrides: Partial<IngestDeps<EventRow>> = {}): IngestDeps<EventRow> {
   return {
     signingKey: KEY,
+    toRows: (events) => events.map(normalizeEvent),
     insert: vi.fn(async (rows: EventRow[]) => rows.length),
     prune: vi.fn(async () => 0),
     now: () => 0,

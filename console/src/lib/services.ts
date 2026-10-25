@@ -54,7 +54,6 @@ export function operatorVerifier(): TokenVerifier {
         : createTokenVerifier({
             serverUrl: config.jmapUrl,
             principal: principalCredentials(),
-            permission: config.operatorPermission,
             allowedAccounts: config.allowedAccounts,
             clientOf: forwardedClient(config.trustedProxyHops),
             maxTokenLifetimeMs: config.maxAccessTokenLifetimeSeconds * 1000,
