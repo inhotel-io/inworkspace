@@ -81,8 +81,9 @@ application again from its `resourceUrl`, the web admin included.
 
 Keeping the code out of the shell therefore matters:
 - A new console version needs nothing on the server.
-- The shell changes only when its settings do, and only then does it need a new record and an
-  Update apps.
+- The shell changes only when its settings or its page template do, and only then does it need
+  a new record and an Update apps or a restart. Release notes say when a version changes the
+  template.
 - The app's routes live in the URL's hash, so no app path reaches the server's checks for
   banned paths. The callback `/console/oauth/callback` is the only real path.
 
@@ -380,8 +381,11 @@ That is off by default, and accounts with the `oAuthClientOverride` permission b
    - An invalid or expired token is therefore never presented to the server as a failed login,
      so the server's authentication ban cannot be turned against the API's own address.
    - Introspection is limited to 120 per minute per instance, and to 20 per minute per client.
-     Clients are told apart by the `X-Forwarded-For` entry that `TRUSTED_PROXY_HOPS` trusted
-     proxies appended. Beyond the limit the API answers 429. Cached tokens are not affected.
+     Beyond the limit the API answers 429.
+   - Clients are told apart by the `X-Forwarded-For` entry that `TRUSTED_PROXY_HOPS` trusted
+     proxies appended. IPv6 clients are counted by their /64.
+   - A token that already passed is checked again without counting, until it expires. A flood
+     of strangers' tokens can therefore only delay new sign-ins, never end a working session.
 5. refuses an active token that lives longer than `MAX_ACCESS_TOKEN_LIFETIME`, one day by
    default, without presenting it to the server.
    - The server's introspection reports every unexpired token it issued as active, including
@@ -392,7 +396,10 @@ That is off by default, and accounts with the `oAuthClientOverride` permission b
    `GET /jmap/session`, both with the operator's token.
    - The reads run one after the other, because the server allows each account four
      concurrent requests.
-   - When the server answers 429, the API retries once.
+   - When the server says the account is at that limit (a 400 with the problem type
+     `urn:ietf:params:jmap:error:limit`), the API retries once after 300 ms. It does the same
+     for introspection, whose requests share the principal's limit.
+   - A 429 is a per-minute limit, so the API reports it as unavailable instead.
 7. requires the permission `OPERATOR_PERMISSION`, `impersonate` by default, and, when
    `ALLOWED_ACCOUNTS` is set, a login on that list. Otherwise it answers 403.
    - The default admits only accounts that could already read any mailbox through
@@ -400,9 +407,12 @@ That is off by default, and accounts with the `oAuthClientOverride` permission b
    - The server's built-in recovery administrator has every permission.
 
 **If the server uses an OpenID Connect directory**, it checks a bearer token with the identity
-provider first, and counts a refusal as a failed login. Put the API's egress address on the
-server's allowed IPs (an `x:AllowedIp` record) so that no ban or rate limit applies to it. With the
-built-in directory, step 5 keeps every token the API presents valid.
+provider first, and counts a refusal as a failed login.
+- Put the API's egress address on the server's allowed IPs (an `x:AllowedIp` record), so that
+  no ban or rate limit applies to it.
+- That needs a static egress address, such as Cloud NAT or Direct VPC egress with a reserved IP.
+  Cloud Run's default egress addresses change, and other Google Cloud customers share them.
+- With the built-in directory, step 5 keeps every token the API presents valid.
 
 **Cross-origin access.** API responses allow exactly the server's origin, taken from
 `JMAP_URL`.
@@ -456,7 +466,7 @@ server's own administration.
 | `DISPLAY_TIME_ZONE` | api | Optional IANA time zone for displayed times; default: the browser's. |
 | `UI_DIST_DIR` | api | Directory of the built web app; default `ui-dist`. |
 | `TRUSTED_PROXY_HOPS` | api | Proxies in front of the service that append the client's address to `X-Forwarded-For`; default 0, which gives no per-client introspection limit. |
-| `MAX_ACCESS_TOKEN_LIFETIME` | api | Seconds an access token can live at most; default 86400. It must be at least the server's access-token lifetime, and below its refresh-token lifetime. |
+| `MAX_ACCESS_TOKEN_LIFETIME` | api | Seconds an access token can live at most; default 86400, at most 604800. It must be at least the server's access-token lifetime, and below its refresh-token lifetime. |
 
 ## Server setup
 
@@ -539,7 +549,7 @@ from the same image, sharing a Postgres database:
 All secrets are supplied as environment variables from a secret manager.
 
 A new console version needs only the deploy: the next page load picks up the new code. The
-setup script needs to run again only when the shell's settings change: the API's URL, the
-client id or the time zone. That needs one Update apps.
+setup script needs to run again only when the shell changes: its settings (the API's URL, the
+client id or the time zone) or its page template. That needs one restart or Update apps.
 
 Organization-specific values never belong in this repository.

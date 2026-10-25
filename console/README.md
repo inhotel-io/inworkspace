@@ -78,7 +78,7 @@ Message bodies are never stored. The console keeps only events (addresses, IPs a
 | `DISPLAY_TIME_ZONE` | api | Optional IANA time zone for displayed times; default: the browser's. |
 | `UI_DIST_DIR` | api | Directory of the built web app; default `ui-dist`. |
 | `TRUSTED_PROXY_HOPS` | api | Proxies in front of the service that append the client's address to `X-Forwarded-For`; default 0. With 0 there is no per-client introspection limit. |
-| `MAX_ACCESS_TOKEN_LIFETIME` | api | Seconds an access token can live at most; default 86400. Must be at least the server's access-token lifetime (default one hour), and below its refresh-token lifetime (default 30 days). |
+| `MAX_ACCESS_TOKEN_LIFETIME` | api | Seconds an access token can live at most; default 86400, at most 604800. Must be at least the server's access-token lifetime (default one hour), and below its refresh-token lifetime (default 30 days). |
 
 The service exits at startup in any of these cases:
 - the configuration is invalid;
@@ -97,8 +97,8 @@ The console needs four things on the inWorkspace server:
 - the web application that serves `/console`.
 
 `scripts/server-setup.mjs` creates or updates all four, and you can run it again safely. Run it
-once, and again only when the shell's settings change: the API's URL, the client id or the time
-zone.
+once, and again only when the shell changes: its settings (the API's URL, the client id or the
+time zone) or its page template, which release notes mention.
 
 ```bash
 SERVER_URL=https://mail.example.com \
@@ -190,8 +190,10 @@ The reference deployment is Google Cloud Run:
     directly.
   - Every API request must carry an operator's access token.
   - Set `PUBLIC_URL` to the service's URL.
-  - Set `TRUSTED_PROXY_HOPS=1`: Cloud Run appends the client's address to
-    `X-Forwarded-For`.
+  - Set `TRUSTED_PROXY_HOPS` so the per-client limit sees real clients:
+    - `1` for the service's own `run.app` URL, where Cloud Run appends the client's address to
+      `X-Forwarded-For`;
+    - `2` behind an external Application Load Balancer, which appends its own address too.
   - Cap the instance count, for example `--max-instances 3`. Each instance has its own
     introspection budget, and every introspection runs as the console principal.
 - **ingest service**: `CONSOLE_ROLE=ingest`, publicly reachable so the mail server can post to
@@ -205,7 +207,8 @@ The reference deployment is Google Cloud Run:
   server exit.
 
 A new console version needs only the deploy: the next page load picks up the new code. Run
-[`scripts/server-setup.mjs`](#server-setup) again only when the shell's settings change.
+[`scripts/server-setup.mjs`](#server-setup) again only when the shell changes: its settings or
+its page template.
 
 ## Upgrading from 0.1
 
@@ -257,9 +260,11 @@ Logs are JSON lines.
   - It checks each token once at a time, and remembers the answer, yes or no, for up to 60
     seconds.
   - Introspections are limited to 120 a minute per instance, and 20 per client. Beyond that it
-    answers 429.
+    answers 429. A session that already passed is checked again without counting, so a flood
+    can only delay new sign-ins.
   - If the server uses an OpenID Connect directory, add the API's egress address to the
-    server's allowed IPs. See the design's sign-in section.
+    server's allowed IPs. That needs a static egress address (Cloud NAT or Direct VPC egress
+    with a reserved IP); see the design's sign-in section.
 - **Signing out** discards the tokens in the tab. The server has no revocation endpoint, so a
   discarded token stays valid until it expires: one hour for access, 30 days for refresh.
   Changing the account's password revokes them all.
