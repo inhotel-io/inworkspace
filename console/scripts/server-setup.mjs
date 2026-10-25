@@ -111,8 +111,9 @@ export async function ensureWebhook(client, { url, signingKey }) {
 
 /** Paths the server or its web admin already use. */
 const RESERVED_PREFIXES = new Set([
-  ".well-known", "account", "admin", "api", "auth", "authorize", "calendar", "card", "dav",
-  "device", "healthz", "jmap", "login", "metrics", "mta-sts.txt", "oauth", "robots.txt",
+  ".well-known", "account", "admin", "api", "auth", "authorize", "autoconfig", "autodiscover",
+  "calendar", "card", "dav", "device", "form", "healthz", "jmap", "login", "logo", "mail",
+  "metrics", "mta-sts.txt", "oauth", "robots.txt",
 ]);
 
 /** "/console/" → "console"; refuses a prefix the server or its web admin use. */
@@ -192,8 +193,9 @@ export async function ensureApplication(client, { prefix, resourceUrl, descripti
 
 /**
  * The server loads web applications when it starts and on this action, not when a record is
- * written. The action also downloads every application again, the web admin included, from its
- * resourceUrl.
+ * written. The action first deletes every application's downloaded copy, the web admin's included,
+ * then downloads each again from its resourceUrl: one that fails to download stays offline until
+ * a later update or restart succeeds. A restart downloads only applications it has no copy of.
  */
 export async function updateApps(client) {
   try {
@@ -242,6 +244,9 @@ async function main() {
   const consoleUrl = required("CONSOLE_URL");
   const manifest = await consoleBundle(consoleUrl);
   const fetchBase = (process.env.CONSOLE_FETCH_URL?.trim() || consoleUrl).replace(/\/+$/, "");
+  if (!fetchBase.startsWith("https://")) {
+    console.log(`warning: the server downloads the shell over plain http from ${fetchBase}; anyone on that path could replace it`);
+  }
   const app = await ensureApplication(client, { prefix: path, resourceUrl: `${fetchBase}/ui/${manifest.file}` });
   console.log(
     app.created
@@ -254,8 +259,9 @@ async function main() {
       console.log(update.updated ? "web applications updated: /" + path + " is live" : `updating web applications failed (${update.reason})`);
     } else {
       console.log(
-        `the server loads it when it starts, or on "Update apps"; that action also downloads the web admin again ` +
-          `from its resourceUrl, so check that URL first, then run with UPDATE_APPS=1`,
+        "the server loads it when it starts: restart the server to make it live. " +
+          '"Update apps" (UPDATE_APPS=1) avoids the restart, but it downloads every application again, the web admin included, ' +
+          "from its resourceUrl: check that URL first, and know that a failed download leaves that application offline until a retry succeeds",
       );
     }
   }

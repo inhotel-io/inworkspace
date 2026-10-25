@@ -225,9 +225,18 @@ try {
       "Subject: Late check-in on Friday?",
       "Message-ID: <e2e-1@example.com>",
       `Date: ${new Date().toUTCString()}`,
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/alternative; boundary="e2e-boundary"',
+      "",
+      "--e2e-boundary",
       "Content-Type: text/plain; charset=utf-8",
       "",
       "Hi, can I check in at 11pm on Friday? Thanks, Jane",
+      "--e2e-boundary",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      '<p>Hi, can I check in at <b>11pm</b> on Friday? Thanks, Jane</p><img src="https://tracker.example/pixel.gif"><script>alert(1)</script>',
+      "--e2e-boundary--",
     ].join("\n"),
   });
   if (!inbound.accepted) throw new Error(`the guest message was refused: ${inbound.reply}`);
@@ -314,6 +323,11 @@ try {
       messages.some((message) => message.direction === "outbound" && message.text.includes("The night desk will have your key.")),
     "the thread has the guest's message and the agent's reply",
   );
+  const formatted = messages.find((message) => message.direction === "inbound")?.html ?? "";
+  expect(
+    formatted.includes("<b>11pm</b>") && !formatted.includes("<script") && !formatted.includes("tracker.example"),
+    "the guest's HTML comes back without its script or its remote image",
+  );
   const events = (await apiJson("events?type=delivery.", token)).body.events;
   expect(events.some((event) => event.type === "delivery.dsn-perm-fail" && JSON.stringify(event.data).includes("null MX")), "the events include the bounce");
   const live = (await apiJson("events?after=0", token)).body;
@@ -324,6 +338,12 @@ try {
   step("Checking what the API refuses");
   expect((await api("me")).status === 401, "a request without a token gets 401");
   expect((await api("me", { token: "bm90LWEtcmVhbC10b2tlbg" })).status === 401, "an invalid token gets 401");
+  const notAccess = await api("me", { token: adminTokens.refresh_token });
+  expect(
+    notAccess.status === 401 && (await notAccess.json()).error.message === "this is not an access token",
+    "a refresh token sent as a bearer token is refused without being presented to the server",
+  );
+  expect((await api("me", { token: "+".repeat(400) })).status === 401, "a token with characters the server never issues gets 401");
   const viewer = await signIn(`viewer@${DOMAIN}`, viewerSecret);
   const forbidden = await api("me", { token: viewer.access_token });
   expect(forbidden.status === 403 && (await forbidden.json()).error.message.includes("impersonate"), "an account without the impersonate permission gets 403");
@@ -339,6 +359,12 @@ try {
   });
   const renewed = await refreshed.json();
   expect(refreshed.ok && (await api("me", { token: renewed.access_token })).status === 200, "a refreshed access token works");
+  const operator = await signIn(`runtime@${DOMAIN}`, runtimeSecret);
+  const together = await Promise.all(["me", "overview", "agents", "events?window=1h"].map((path) => api(path, { token: operator.access_token })));
+  expect(
+    together.every((response) => response.status === 200),
+    "an operator with only the impersonate permission can send a page's requests at once",
+  );
   const unsigned = await fetch(`${CONSOLE}/api/ingest/events`, { method: "POST", body: '{"events":[]}' });
   expect(unsigned.status === 401, "an unsigned webhook post is refused with 401");
 
