@@ -190,6 +190,21 @@ export async function ensureApplication(client, { prefix, resourceUrl, descripti
   return { id, created: true, removed: mine.length };
 }
 
+/**
+ * The server loads web applications when it starts and on this action, not when a record is
+ * written. The action also downloads every application again, the web admin included, from its
+ * resourceUrl.
+ */
+export async function updateApps(client) {
+  try {
+    const result = await client.one("x:Action/set", { create: { u: { "@type": "UpdateApps" } } });
+    if (result.notCreated?.u) return { updated: false, reason: JSON.stringify(result.notCreated.u) };
+    return { updated: true };
+  } catch (error) {
+    return { updated: false, reason: error.message };
+  }
+}
+
 /** Some server versions refuse to reload because of an unrelated default setting; the webhook then activates on restart. */
 export async function reloadSettings(client) {
   try {
@@ -230,9 +245,20 @@ async function main() {
   const app = await ensureApplication(client, { prefix: path, resourceUrl: `${fetchBase}/ui/${manifest.file}` });
   console.log(
     app.created
-      ? `web application /${path} now serves bundle ${manifest.version}${app.removed ? ` (${app.removed} previous record removed)` : ""}`
-      : `web application /${path} already serves bundle ${manifest.version}`,
+      ? `web application /${path} registered for shell ${manifest.version}${app.removed ? ` (${app.removed} previous record removed)` : ""}`
+      : `web application /${path} already registered for shell ${manifest.version}`,
   );
+  if (app.created) {
+    if (process.env.UPDATE_APPS === "1") {
+      const update = await updateApps(client);
+      console.log(update.updated ? "web applications updated: /" + path + " is live" : `updating web applications failed (${update.reason})`);
+    } else {
+      console.log(
+        `the server loads it when it starts, or on "Update apps"; that action also downloads the web admin again ` +
+          `from its resourceUrl, so check that URL first, then run with UPDATE_APPS=1`,
+      );
+    }
+  }
 
   const reload = await reloadSettings(client);
   console.log(reload.reloaded ? "settings reloaded" : `settings not reloaded (${reload.reason}); restart the server to activate the webhook`);

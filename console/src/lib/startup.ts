@@ -2,24 +2,26 @@ import path from "node:path";
 import { getConfig, servesApi } from "./config";
 import { getPool } from "./db";
 import { migrate } from "./migrations";
-import { buildUiBundle, uiSettingsFrom } from "./uiBundle";
+import { buildUiShell, loadUiApp, uiSettingsFrom } from "./uiBundle";
 
 function log(entry: Record<string, unknown>): void {
   console.log(JSON.stringify(entry));
 }
 
-/** Validates the configuration, applies migrations and, in the api role, builds the web app's bundle; throws when any fails. */
+/** Validates the configuration, applies migrations and, in the api role, loads the web app; throws when any fails. */
 export async function startup(): Promise<void> {
   const config = getConfig();
   const applied = await migrate(getPool());
-  const bundle = servesApi(config) ? await buildUiBundle(path.resolve(config.uiDistDir), uiSettingsFrom(config)) : null;
+  const distDir = path.resolve(config.uiDistDir);
+  const shell = servesApi(config) ? await buildUiShell(distDir, uiSettingsFrom(config)) : null;
+  if (servesApi(config)) await loadUiApp(distDir);
   log({
     severity: "INFO",
     message: "console.started",
     role: config.role,
     authMode: servesApi(config) ? config.authMode : null,
     migrationsApplied: applied,
-    uiVersion: bundle?.version ?? null,
+    shellVersion: shell?.version ?? null,
   });
 }
 

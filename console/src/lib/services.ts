@@ -4,14 +4,15 @@ import { createTokenVerifier, LOCAL_OPERATOR, type TokenVerifier } from "./auth"
 import { getConfig } from "./config";
 import { fetchAgents, type Agent, type DirectorySettings } from "./directory";
 import { JmapClient, type Credentials } from "./jmap";
-import { buildUiBundle, uiSettingsFrom, type UiBundle } from "./uiBundle";
+import { buildUiShell, loadUiApp, uiSettingsFrom, type UiApp, type UiShell } from "./uiBundle";
 
 const AGENT_CACHE_MS = 5 * 60 * 1000;
 
 let client: JmapClient | undefined;
 let agentCache: { loadedAt: number; agents: Agent[] } | undefined;
 let verifier: TokenVerifier | undefined;
-let bundle: Promise<UiBundle> | undefined;
+let shell: Promise<UiShell> | undefined;
+let app: Promise<UiApp> | undefined;
 
 export function jmapClient(): JmapClient {
   client ??= new JmapClient(getConfig().jmapUrl);
@@ -60,9 +61,15 @@ export function operatorVerifier(): TokenVerifier {
   return verifier;
 }
 
-/** The web app's bundle, built once per process from the files of `npm run build:ui`. */
-export function uiBundle(): Promise<UiBundle> {
+/** The page the server hosts, built once per process from this deployment's settings. */
+export function uiShell(): Promise<UiShell> {
   const config = getConfig();
-  bundle ??= buildUiBundle(path.resolve(config.uiDistDir), uiSettingsFrom(config));
-  return bundle;
+  shell ??= buildUiShell(path.resolve(config.uiDistDir), uiSettingsFrom(config));
+  return shell;
+}
+
+/** The web app's code from `npm run build:ui`, loaded once per process. */
+export function uiApp(): Promise<UiApp> {
+  app ??= loadUiApp(path.resolve(getConfig().uiDistDir));
+  return app;
 }

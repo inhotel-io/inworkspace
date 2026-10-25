@@ -32,7 +32,8 @@ export default defineConfig({
   base: "./",
   plugins: [react(), tailwindcss(), developmentSettings()],
   resolve: { alias: { "@": path.resolve(import.meta.dirname, "src") } },
-  build: { outDir: path.resolve(import.meta.dirname, "ui-dist"), emptyOutDir: true },
+  // The manifest names the entry and its stylesheets; the console service generates its loader from it.
+  build: { outDir: path.resolve(import.meta.dirname, "ui-dist"), emptyOutDir: true, manifest: true },
   server: {
     port: 5173,
     proxy: {

@@ -4,24 +4,56 @@ import path from "node:path";
 import { zipSync, type Zippable } from "fflate";
 import type { ConsoleConfig } from "./config";
 
+// The web app has two parts:
+// - The shell, which the server hosts as one of its web applications. It is a page with the
+//   settings, and it changes only when they do.
+// - The app's code, which this service serves itself.
+// The server loads web applications only when it starts, or on its "Update apps" action. Keeping
+// the code out of the shell means a new console version needs nothing on the server.
+
 export interface UiSettings {
   apiUrl: string;
   clientId: string;
   timeZone: string | null;
 }
 
-export interface UiBundle {
+export interface UiShell {
   version: string;
   fileName: string;
   zip: Uint8Array<ArrayBuffer>;
 }
 
-export const BUNDLE_FILE = /^console-[A-Za-z0-9_-]{1,64}\.zip$/;
+export interface UiAsset {
+  content: Uint8Array<ArrayBuffer>;
+  type: string;
+}
 
-/** The server rewrites exactly this tag to the app's prefix; without it the app cannot find its assets. */
-const BASE_TAG = '<base href="/"';
-/** A fixed time for every entry, so the same files always give the same zip. */
+export interface UiApp {
+  /** The module the shell loads: it adds the stylesheets, then imports the current entry. */
+  entry: string;
+  assets: Map<string, UiAsset>;
+}
+
+interface ManifestEntry {
+  file: string;
+  css?: string[];
+  isEntry?: boolean;
+}
+
+export const SHELL_FILE = /^console-[A-Za-z0-9_-]{1,64}\.zip$/;
+export const ASSET_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** A fixed time for every zip entry, so the same files always give the same zip. */
 const ENTRY_TIME = new Date("2000-01-01T00:00:00Z");
+
+const TYPES: Record<string, string> = {
+  js: "text/javascript; charset=utf-8",
+  css: "text/css; charset=utf-8",
+  svg: "image/svg+xml",
+  png: "image/png",
+  ico: "image/x-icon",
+  woff2: "font/woff2",
+};
 
 export function uiSettingsFrom(config: Pick<ConsoleConfig, "publicUrl" | "oauthClientId" | "displayTimeZone">): UiSettings {
   return { apiUrl: config.publicUrl, clientId: config.oauthClientId, timeZone: config.displayTimeZone };
@@ -31,15 +63,16 @@ function escapeAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** The web app's own policy: its scripts and styles, calls to the console API only, inline images only. */
+/** The shell's policy: code and styles only from the console API, calls only to it and the server. */
 export function contentSecurityPolicy(apiUrl: string): string {
+  const api = new URL(apiUrl).origin;
   return [
     "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
+    `script-src ${api}`,
+    `style-src ${api} 'unsafe-inline'`,
     "img-src 'self' data:",
     "font-src 'self' data:",
-    `connect-src 'self' ${new URL(apiUrl).origin}`,
+    `connect-src 'self' ${api}`,
     "frame-src 'self'",
     "base-uri 'self'",
     "form-action 'none'",
@@ -47,58 +80,87 @@ export function contentSecurityPolicy(apiUrl: string): string {
   ].join("; ");
 }
 
-export function renderIndex(template: string, settings: UiSettings): string {
-  if (!template.includes(BASE_TAG)) {
-    throw new Error(`the built index.html has no ${BASE_TAG}> tag, so the server could not place the app under its prefix`);
-  }
-  const values: Record<string, string> = {
-    __CONSOLE_CSP__: contentSecurityPolicy(settings.apiUrl),
-    __CONSOLE_API_URL__: settings.apiUrl,
-    __CONSOLE_OAUTH_CLIENT_ID__: settings.clientId,
-    __CONSOLE_TIME_ZONE__: settings.timeZone ?? "",
-  };
-  let html = template;
-  for (const [placeholder, value] of Object.entries(values)) {
-    if (!html.includes(placeholder)) throw new Error(`the built index.html has no ${placeholder} placeholder`);
-    html = html.split(placeholder).join(escapeAttribute(value));
-  }
-  return html;
+export function shellPage(settings: UiSettings): string {
+  return [
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    '<meta charset="utf-8" />',
+    `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(contentSecurityPolicy(settings.apiUrl))}" />`,
+    // The server rewrites exactly this tag to the app's prefix; the app reads its base path from it.
+    '<base href="/" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+    '<meta name="robots" content="noindex, nofollow" />',
+    '<meta name="referrer" content="no-referrer" />',
+    `<meta name="inworkspace-console-api" content="${escapeAttribute(settings.apiUrl)}" />`,
+    `<meta name="inworkspace-console-client-id" content="${escapeAttribute(settings.clientId)}" />`,
+    `<meta name="inworkspace-console-time-zone" content="${escapeAttribute(settings.timeZone ?? "")}" />`,
+    '<link rel="icon" href="./favicon.ico" />',
+    "<title>inWorkspace Console</title>",
+    `<script type="module" src="${escapeAttribute(`${settings.apiUrl}/ui/app/entry.js`)}"></script>`,
+    "</head>",
+    '<body><div id="root"></div></body>',
+    "</html>",
+    "",
+  ].join("\n");
 }
 
-async function listFiles(root: string, directory = ""): Promise<string[]> {
-  const entries = await readdir(path.join(root, directory), { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const relative = directory ? `${directory}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) files.push(...(await listFiles(root, relative)));
-    else if (entry.isFile()) files.push(relative);
-  }
-  return files;
-}
-
-/** The built web app as the zip the server downloads, with this deployment's settings in index.html. */
-export async function buildUiBundle(distDir: string, settings: UiSettings): Promise<UiBundle> {
-  let files: string[];
-  try {
-    files = (await listFiles(distDir)).sort();
-  } catch {
-    files = [];
-  }
-  if (!files.includes("index.html")) {
-    throw new Error(`${distDir} has no index.html; build the web app with \`npm run build:ui\``);
-  }
+/** The shell as the zip the server downloads: the page and the icon. */
+export async function buildUiShell(distDir: string, settings: UiSettings): Promise<UiShell> {
+  const files: [string, Uint8Array][] = [["index.html", new TextEncoder().encode(shellPage(settings))]];
+  const icon = await readFile(path.join(distDir, "favicon.ico")).catch(() => null);
+  if (icon) files.push(["favicon.ico", icon]);
   const entries: Zippable = {};
   const hash = createHash("sha256");
-  for (const file of files) {
-    let content: Uint8Array = await readFile(path.join(distDir, file));
-    if (file === "index.html") content = new TextEncoder().encode(renderIndex(Buffer.from(content).toString("utf8"), settings));
-    entries[file] = content;
-    hash.update(file).update("\0").update(content).update("\0");
+  for (const [name, content] of files) {
+    entries[name] = content;
+    hash.update(name).update("\0").update(content).update("\0");
   }
   const version = hash.digest("hex").slice(0, 16);
-  return {
-    version,
-    fileName: `console-${version}.zip`,
-    zip: new Uint8Array(zipSync(entries, { level: 9, mtime: ENTRY_TIME })),
-  };
+  return { version, fileName: `console-${version}.zip`, zip: zipSync(entries, { level: 9, mtime: ENTRY_TIME }) };
+}
+
+export function entryModule(entry: ManifestEntry): string {
+  return [
+    "// Generated by the inWorkspace Console API: loads the current build of the web app.",
+    'const base = new URL("./", import.meta.url);',
+    `await Promise.all(${JSON.stringify(entry.css ?? [])}.map((href) => new Promise((done) => {`,
+    '  const link = document.createElement("link");',
+    '  link.rel = "stylesheet";',
+    "  link.href = new URL(href, base).href;",
+    "  link.onload = link.onerror = done;",
+    "  document.head.append(link);",
+    "})));",
+    `await import(new URL(${JSON.stringify(entry.file)}, base).href);`,
+    "",
+  ].join("\n");
+}
+
+function assetName(file: string): string | null {
+  const name = file.startsWith("assets/") ? file.slice("assets/".length) : null;
+  return name && ASSET_FILE.test(name) ? name : null;
+}
+
+/** The build of `npm run build:ui`: its entry module and every file under assets/. */
+export async function loadUiApp(distDir: string): Promise<UiApp> {
+  let manifest: Record<string, ManifestEntry>;
+  try {
+    manifest = JSON.parse(await readFile(path.join(distDir, ".vite", "manifest.json"), "utf8")) as Record<string, ManifestEntry>;
+  } catch {
+    throw new Error(`${distDir} has no .vite/manifest.json; build the web app with \`npm run build:ui\``);
+  }
+  const entry = Object.values(manifest).find((item) => item.isEntry);
+  if (!entry) throw new Error("the web app's build manifest names no entry");
+
+  const assets = new Map<string, UiAsset>();
+  for (const name of await readdir(path.join(distDir, "assets"))) {
+    if (!ASSET_FILE.test(name)) continue;
+    const content = new Uint8Array(await readFile(path.join(distDir, "assets", name)));
+    assets.set(name, { content, type: TYPES[name.slice(name.lastIndexOf(".") + 1)] ?? "application/octet-stream" });
+  }
+  for (const file of [entry.file, ...(entry.css ?? [])]) {
+    const name = assetName(file);
+    if (!name || !assets.has(name)) throw new Error(`the web app's build manifest names ${file}, which the build does not have`);
+  }
+  return { entry: entryModule(entry), assets };
 }
