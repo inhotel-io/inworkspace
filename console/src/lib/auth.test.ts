@@ -1,18 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { AuthError, RateLimitError, VerifierUnavailableError, bearerToken, createTokenVerifier } from "./auth";
+import { AuthError, RateLimitError, VerifierUnavailableError, bearerToken, createTokenVerifier, forwardedClient } from "./auth";
 
 const NOW = Date.parse("2026-10-26T10:00:00Z");
 const SERVER = "https://mail.example.com";
 const PRINCIPAL = { username: "console@example.com", password: "principal-secret" };
-const TOKEN = "dG9rZW4tZm9yLWFkbWlu";
+const TOKEN = "sw1.dG9rZW4tZm9yLWFkbWlu";
 
 interface FakeServer {
   active?: boolean;
-  exp?: number;
+  /** Seconds the token lives: an hour for an access token, a month for a refresh token. */
+  lifetime?: number;
+  omitLifetime?: boolean;
   permissions?: string[];
   username?: string;
   introspectStatus?: number;
-  accountStatus?: number;
+  introspectBody?: string;
+  /** Answers for /api/account, in order; the last one repeats. */
+  accountStatuses?: number[];
   failWith?: Error;
 }
 
@@ -24,6 +28,9 @@ interface Call {
 
 function fakeServer(options: FakeServer = {}) {
   const calls: Call[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let accountCalls = 0;
   const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     if (options.failWith) throw options.failWith;
     const url = new URL(String(input));
@@ -32,33 +39,53 @@ function fakeServer(options: FakeServer = {}) {
       authorization: new Headers(init?.headers).get("authorization"),
       body: typeof init?.body === "string" ? init.body : null,
     });
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    inFlight -= 1;
     if (url.pathname === "/auth/introspect") {
       if (options.introspectStatus) return new Response("", { status: options.introspectStatus });
-      return Response.json({ active: options.active ?? true, exp: options.exp ?? NOW / 1000 + 3600 });
+      if (options.introspectBody !== undefined) return new Response(options.introspectBody, { status: 200 });
+      const iat = NOW / 1000 - 60;
+      return Response.json(
+        options.omitLifetime
+          ? { active: options.active ?? true }
+          : { active: options.active ?? true, iat, exp: iat + (options.lifetime ?? 3600) },
+      );
     }
     if (url.pathname === "/api/account") {
-      if (options.accountStatus) return new Response("", { status: options.accountStatus });
+      const statuses = options.accountStatuses ?? [200];
+      const status = statuses[Math.min(accountCalls, statuses.length - 1)]!;
+      accountCalls += 1;
+      if (status !== 200) return new Response("", { status });
       return Response.json({ permissions: options.permissions ?? ["authenticate", "impersonate"], edition: "community", locale: "en" });
     }
     if (url.pathname === "/jmap/session") return Response.json({ username: options.username ?? "admin", accounts: {} });
     return new Response("", { status: 404 });
   }) as typeof globalThis.fetch;
-  return { fetch, calls };
+  return { fetch, calls, maxInFlight: () => maxInFlight };
 }
 
-function bearer(token = TOKEN): Headers {
-  return new Headers({ Authorization: `Bearer ${token}` });
+function bearer(token = TOKEN, client?: string): Headers {
+  return new Headers({ Authorization: `Bearer ${token}`, ...(client ? { "X-Forwarded-For": client } : {}) });
 }
 
-function verifierFor(server: ReturnType<typeof fakeServer>, clock = { now: NOW }, extra: { allowedAccounts?: string[]; introspectionsPerMinute?: number } = {}) {
+function verifierFor(
+  server: ReturnType<typeof fakeServer>,
+  clock = { now: NOW },
+  extra: { allowedAccounts?: string[]; perMinute?: number; perClientPerMinute?: number; trustedProxyHops?: number } = {},
+) {
   return createTokenVerifier({
     serverUrl: SERVER,
     principal: PRINCIPAL,
     permission: "impersonate",
     allowedAccounts: extra.allowedAccounts ?? [],
-    introspectionsPerMinute: extra.introspectionsPerMinute,
+    introspectionsPerMinute: extra.perMinute,
+    introspectionsPerClientPerMinute: extra.perClientPerMinute,
+    clientOf: forwardedClient(extra.trustedProxyHops ?? 1),
     fetch: server.fetch,
     now: () => clock.now,
+    sleep: async () => {},
   });
 }
 
@@ -69,15 +96,36 @@ describe("bearerToken", () => {
   });
 
   it("refuses a missing, malformed or oversized token", () => {
-    for (const value of [null, "Basic YWRtaW46c2VjcmV0", "Bearer", "Bearer a b", "Bearer <script>", `Bearer ${"a".repeat(1001)}`]) {
+    const values = [null, "Basic YWRtaW46c2VjcmV0", "Bearer", "Bearer a b", "Bearer <script>", "Bearer short", `Bearer ${"a".repeat(1001)}`];
+    for (const value of values) {
       const headers = new Headers(value === null ? {} : { Authorization: value });
       expect(() => bearerToken(headers)).toThrow(AuthError);
     }
   });
+
+  it("refuses characters a server token never has, which would also outgrow the introspection form", () => {
+    for (const character of ["+", "/", "=", "~"]) {
+      expect(() => bearerToken(new Headers({ Authorization: `Bearer sw1.${character.repeat(400)}` }))).toThrow(AuthError);
+    }
+  });
+});
+
+describe("forwardedClient", () => {
+  it("takes the address the trusted proxies appended", () => {
+    const headers = new Headers({ "X-Forwarded-For": "203.0.113.9, 198.51.100.7" });
+    expect(forwardedClient(1)(headers)).toBe("198.51.100.7");
+    expect(forwardedClient(2)(headers)).toBe("203.0.113.9");
+  });
+
+  it("knows no client without trusted proxies or the header", () => {
+    expect(forwardedClient(0)(new Headers({ "X-Forwarded-For": "203.0.113.9" }))).toBeNull();
+    expect(forwardedClient(1)(new Headers())).toBeNull();
+    expect(forwardedClient(3)(new Headers({ "X-Forwarded-For": "203.0.113.9" }))).toBeNull();
+  });
 });
 
 describe("createTokenVerifier", () => {
-  it("accepts an active token from an account with the permission", async () => {
+  it("accepts an active access token from an account with the permission", async () => {
     const server = fakeServer();
     await expect(verifierFor(server)(bearer())).resolves.toEqual({ login: "admin" });
     expect(server.calls.map((call) => call.path)).toEqual(["/auth/introspect", "/api/account", "/jmap/session"]);
@@ -93,18 +141,39 @@ describe("createTokenVerifier", () => {
     expect(session?.authorization).toBe(`Bearer ${TOKEN}`);
   });
 
-  it("refuses an inactive token without presenting it to the server as a login", async () => {
+  it("asks the server one thing at a time, and once for requests that arrive together", async () => {
+    const server = fakeServer();
+    const verify = verifierFor(server);
+    const operators = await Promise.all([verify(bearer()), verify(bearer()), verify(bearer())]);
+    expect(operators).toEqual([{ login: "admin" }, { login: "admin" }, { login: "admin" }]);
+    expect(server.calls).toHaveLength(3);
+    expect(server.maxInFlight()).toBe(1);
+  });
+
+  it("refuses an inactive token without presenting it to the server as a login, and remembers it", async () => {
     const server = fakeServer({ active: false });
-    await expect(verifierFor(server)(bearer())).rejects.toMatchObject({ name: "AuthError", status: 401 });
+    const verify = verifierFor(server);
+    await expect(verify(bearer())).rejects.toMatchObject({ name: "AuthError", status: 401 });
+    await expect(verify(bearer())).rejects.toMatchObject({ name: "AuthError", status: 401 });
     expect(server.calls.map((call) => call.path)).toEqual(["/auth/introspect"]);
   });
 
-  it("refuses an account without the permission with 403", async () => {
+  it("refuses a long-lived token, such as a refresh token, without presenting it to the server", async () => {
+    const server = fakeServer({ lifetime: 30 * 86400 });
+    await expect(verifierFor(server)(bearer())).rejects.toMatchObject({ status: 401, message: "this is not an access token" });
+    expect(server.calls.map((call) => call.path)).toEqual(["/auth/introspect"]);
+  });
+
+  it("does not guess when introspection gives no lifetime", async () => {
+    await expect(verifierFor(fakeServer({ omitLifetime: true }))(bearer())).rejects.toBeInstanceOf(VerifierUnavailableError);
+  });
+
+  it("refuses an account without the permission with 403, and remembers it", async () => {
     const server = fakeServer({ permissions: ["authenticate"], username: "Jane@Example.com" });
-    await expect(verifierFor(server)(bearer())).rejects.toMatchObject({
-      status: 403,
-      message: "jane@example.com does not have the impersonate permission",
-    });
+    const verify = verifierFor(server);
+    await expect(verify(bearer())).rejects.toMatchObject({ status: 403, message: "jane@example.com does not have the impersonate permission" });
+    await expect(verify(bearer())).rejects.toMatchObject({ status: 403 });
+    expect(server.calls).toHaveLength(3);
   });
 
   it("applies the allow-list when one is set", async () => {
@@ -129,7 +198,7 @@ describe("createTokenVerifier", () => {
   });
 
   it("never caches a token past its expiry", async () => {
-    const server = fakeServer({ exp: NOW / 1000 + 10 });
+    const server = fakeServer({ lifetime: 70 });
     const clock = { now: NOW };
     const verify = verifierFor(server, clock);
     await verify(bearer());
@@ -141,24 +210,44 @@ describe("createTokenVerifier", () => {
   it("limits introspections per minute, but not cached tokens", async () => {
     const server = fakeServer();
     const clock = { now: NOW };
-    const verify = verifierFor(server, clock, { introspectionsPerMinute: 2 });
-    await verify(bearer("token-one"));
-    await verify(bearer("token-two"));
-    await expect(verify(bearer("token-three"))).rejects.toBeInstanceOf(RateLimitError);
-    await expect(verify(bearer("token-one"))).resolves.toEqual({ login: "admin" });
+    const verify = verifierFor(server, clock, { perMinute: 2 });
+    await verify(bearer("sw1.token-one-xxxxxxxx"));
+    await verify(bearer("sw1.token-two-xxxxxxxx"));
+    await expect(verify(bearer("sw1.token-three-xxxxxx"))).rejects.toBeInstanceOf(RateLimitError);
+    await expect(verify(bearer("sw1.token-one-xxxxxxxx"))).resolves.toEqual({ login: "admin" });
     clock.now += 60_000;
-    await expect(verify(bearer("token-three"))).resolves.toEqual({ login: "admin" });
+    await expect(verify(bearer("sw1.token-three-xxxxxx"))).resolves.toEqual({ login: "admin" });
   });
 
-  it("reports a server it cannot ask as unavailable", async () => {
-    await expect(verifierFor(fakeServer({ failWith: new TypeError("fetch failed") }))(bearer())).rejects.toBeInstanceOf(
-      VerifierUnavailableError,
-    );
-    await expect(verifierFor(fakeServer({ introspectStatus: 401 }))(bearer())).rejects.toBeInstanceOf(VerifierUnavailableError);
-    await expect(verifierFor(fakeServer({ accountStatus: 500 }))(bearer())).rejects.toBeInstanceOf(VerifierUnavailableError);
+  it("limits each client separately, so one client cannot use up the budget", async () => {
+    const server = fakeServer({ active: false });
+    const verify = verifierFor(server, undefined, { perClientPerMinute: 2 });
+    await expect(verify(bearer("sw1.garbage-one-xxxxxx", "203.0.113.9"))).rejects.toBeInstanceOf(AuthError);
+    await expect(verify(bearer("sw1.garbage-two-xxxxxx", "203.0.113.9"))).rejects.toBeInstanceOf(AuthError);
+    await expect(verify(bearer("sw1.garbage-three-xxxx", "203.0.113.9"))).rejects.toBeInstanceOf(RateLimitError);
+    await expect(verify(bearer("sw1.another-client-xxx", "198.51.100.7"))).rejects.toBeInstanceOf(AuthError);
+  });
+
+  it("retries once when the server limits the operator's account", async () => {
+    const server = fakeServer({ accountStatuses: [429, 200] });
+    await expect(verifierFor(server)(bearer())).resolves.toEqual({ login: "admin" });
+    expect(server.calls.filter((call) => call.path === "/api/account")).toHaveLength(2);
+  });
+
+  it("reports a server it cannot ask, or cannot understand, as unavailable", async () => {
+    for (const options of [
+      { failWith: new TypeError("fetch failed") },
+      { introspectStatus: 401 },
+      { introspectStatus: 413 },
+      { introspectBody: "<html>proxy error</html>" },
+      { accountStatuses: [500] },
+      { accountStatuses: [429, 429] },
+    ] satisfies FakeServer[]) {
+      await expect(verifierFor(fakeServer(options))(bearer())).rejects.toBeInstanceOf(VerifierUnavailableError);
+    }
   });
 
   it("treats a token refused by the account read as an ended session", async () => {
-    await expect(verifierFor(fakeServer({ accountStatus: 401 }))(bearer())).rejects.toMatchObject({ name: "AuthError", status: 401 });
+    await expect(verifierFor(fakeServer({ accountStatuses: [401] }))(bearer())).rejects.toMatchObject({ name: "AuthError", status: 401 });
   });
 });

@@ -1,6 +1,6 @@
 import "server-only";
 import path from "node:path";
-import { createTokenVerifier, LOCAL_OPERATOR, type TokenVerifier } from "./auth";
+import { createTokenVerifier, forwardedClient, LOCAL_OPERATOR, type TokenVerifier } from "./auth";
 import { getConfig } from "./config";
 import { fetchAgents, type Agent, type DirectorySettings } from "./directory";
 import { JmapClient, type Credentials } from "./jmap";
@@ -56,6 +56,8 @@ export function operatorVerifier(): TokenVerifier {
             principal: principalCredentials(),
             permission: config.operatorPermission,
             allowedAccounts: config.allowedAccounts,
+            clientOf: forwardedClient(config.trustedProxyHops),
+            maxTokenLifetimeMs: config.maxAccessTokenLifetimeSeconds * 1000,
           });
   }
   return verifier;

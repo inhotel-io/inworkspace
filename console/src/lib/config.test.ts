@@ -114,6 +114,28 @@ describe("parseConfig", () => {
     );
   });
 
+  it("refuses an origin with a path, query, credentials or another scheme", () => {
+    for (const value of ["https://mail.example.com?x", "https://user:pw@mail.example.com", "ftp://mail.example.com", "mail.example.com"]) {
+      expect(problemsOf({ ...API, JMAP_URL: value })).toContain("JMAP_URL must be an http(s) origin such as https://mail.example.com");
+    }
+    expect(parseConfig({ ...API, JMAP_URL: "https://Mail.Example.com/" }).jmapUrl).toBe("https://mail.example.com");
+  });
+
+  it("reads the proxy hops and the longest access-token lifetime", () => {
+    const defaults = parseConfig(API);
+    expect(defaults.trustedProxyHops).toBe(0);
+    expect(defaults.maxAccessTokenLifetimeSeconds).toBe(86400);
+    const set = parseConfig({ ...API, TRUSTED_PROXY_HOPS: "1", MAX_ACCESS_TOKEN_LIFETIME: "7200" });
+    expect(set.trustedProxyHops).toBe(1);
+    expect(set.maxAccessTokenLifetimeSeconds).toBe(7200);
+    expect(problemsOf({ ...API, TRUSTED_PROXY_HOPS: "-1", MAX_ACCESS_TOKEN_LIFETIME: "0" })).toEqual(
+      expect.arrayContaining([
+        "TRUSTED_PROXY_HOPS must be a whole number from 0 to 10",
+        "MAX_ACCESS_TOKEN_LIFETIME must be a whole number of seconds from 60 to 2592000",
+      ]),
+    );
+  });
+
   it("accepts only the server and none sign-in modes", () => {
     expect(problemsOf({ ...API, AUTH_MODE: "iap" })).toContain("AUTH_MODE must be server or none");
   });

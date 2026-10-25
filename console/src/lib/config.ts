@@ -24,6 +24,10 @@ export interface ConsoleConfig {
   /** Null shows times in each browser's own time zone. */
   displayTimeZone: string | null;
   uiDistDir: string;
+  /** Proxies in front of this service that append the client's address to X-Forwarded-For. */
+  trustedProxyHops: number;
+  /** Tokens that live longer cannot be access tokens (refresh tokens, links), and are refused unchecked. */
+  maxAccessTokenLifetimeSeconds: number;
 }
 
 export class ConfigError extends Error {
@@ -35,7 +39,15 @@ export class ConfigError extends Error {
 
 type Env = Readonly<Record<string, string | undefined>>;
 
-const ORIGIN = /^https?:\/\/[^/]+$/;
+/** The origin of an http(s) URL that is nothing more than an origin; null otherwise. */
+function originOf(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || url.protocol === "http:") && url.href === `${url.origin}/` ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
 
 export function servesIngest(config: Pick<ConsoleConfig, "role">): boolean {
   return config.role === "ingest" || config.role === "all";
@@ -64,8 +76,17 @@ export function parseConfig(env: Env): ConsoleConfig {
     return value;
   };
   const origin = (name: string, example: string): string => {
-    const value = need(name).replace(/\/+$/, "");
-    if (value && !ORIGIN.test(value)) problems.push(`${name} must be an http(s) origin such as ${example}`);
+    const value = need(name);
+    if (!value) return "";
+    const parsed = originOf(value);
+    if (!parsed) problems.push(`${name} must be an http(s) origin such as ${example}`);
+    return parsed ?? value;
+  };
+  const whole = (name: string, fallback: number, min: number, max: number, problem: string): number => {
+    const raw = text(env, name);
+    if (!raw) return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < min || value > max) problems.push(problem);
     return value;
   };
 
@@ -103,6 +124,8 @@ export function parseConfig(env: Env): ConsoleConfig {
   let oauthClientId = "inworkspace-console";
   let displayTimeZone: string | null = null;
   let uiDistDir = "ui-dist";
+  let trustedProxyHops = 0;
+  let maxAccessTokenLifetimeSeconds = 86400;
   if (servesApi({ role })) {
     jmapUrl = origin("JMAP_URL", "https://mail.example.com");
     jmapPrincipal = need("JMAP_PRINCIPAL").toLowerCase();
@@ -148,6 +171,14 @@ export function parseConfig(env: Env): ConsoleConfig {
       }
     }
     uiDistDir = text(env, "UI_DIST_DIR") || "ui-dist";
+    trustedProxyHops = whole("TRUSTED_PROXY_HOPS", 0, 0, 10, "TRUSTED_PROXY_HOPS must be a whole number from 0 to 10");
+    maxAccessTokenLifetimeSeconds = whole(
+      "MAX_ACCESS_TOKEN_LIFETIME",
+      86400,
+      60,
+      2_592_000,
+      "MAX_ACCESS_TOKEN_LIFETIME must be a whole number of seconds from 60 to 2592000",
+    );
   }
 
   if (problems.length > 0) throw new ConfigError(problems);
@@ -168,6 +199,8 @@ export function parseConfig(env: Env): ConsoleConfig {
     oauthClientId,
     displayTimeZone,
     uiDistDir,
+    trustedProxyHops,
+    maxAccessTokenLifetimeSeconds,
   };
 }
 
