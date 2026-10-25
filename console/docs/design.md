@@ -267,6 +267,9 @@ seconds and prepends new rows. Each row expands to its full JSON.
     caller's Google ID token. Cloud Run forwards the token with its signature replaced by
     `SIGNATURE_REMOVED_BY_GOOGLE`, so the gate reads the email only from such tokens. It also
     requires a Google issuer, an unexpired token and a verified email.
+  - The token is read from `X-Serverless-Authorization` when present, else from
+    `Authorization`. Cloud Run authenticates with the former when both are sent and passes the
+    latter through unchecked.
   - Because `cloud-run` mode trusts Cloud Run's check, the web role reads its own service and
     IAM policy at startup and every five minutes. It refuses to start, or exits, when
     `allUsers` or `allAuthenticatedUsers` may invoke it, or when the invoker check is

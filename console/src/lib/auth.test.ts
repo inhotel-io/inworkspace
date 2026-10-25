@@ -67,6 +67,18 @@ describe("authenticate with AUTH_MODE=cloud-run", () => {
     return new Headers({ authorization: `Bearer ${encode({ alg: "RS256", typ: "JWT" })}.${encode(payload)}.${signature}` });
   }
 
+  it("reads X-Serverless-Authorization, which `gcloud run services proxy` uses", async () => {
+    const headers = new Headers({ "x-serverless-authorization": forwarded({ email: "alex@example.com" }).get("authorization")! });
+    await expect(authenticate(headers, CLOUD_RUN)).resolves.toEqual({ email: "alex@example.com" });
+  });
+
+  it("prefers X-Serverless-Authorization, because Cloud Run then leaves Authorization unchecked", async () => {
+    const verified = forwarded({ email: "eve@elsewhere.example" }).get("authorization")!;
+    const forged = forwarded({ email: "alex@example.com" }).get("authorization")!;
+    const headers = new Headers({ "x-serverless-authorization": verified, authorization: forged });
+    await expect(authenticate(headers, CLOUD_RUN)).rejects.toThrow("eve@elsewhere.example is not allowed");
+  });
+
   it("takes the operator from a token that passed Cloud Run's IAM check", async () => {
     await expect(authenticate(forwarded({ email: "Alex@Example.com" }), CLOUD_RUN)).resolves.toEqual({ email: "alex@example.com" });
     await expect(authenticate(forwarded({ email: "ops@partner.example", iss: "accounts.google.com" }), CLOUD_RUN)).resolves.toEqual({

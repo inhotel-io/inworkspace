@@ -41,7 +41,10 @@ const GOOGLE_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.
  * service ever becomes publicly invokable.
  */
 function cloudRunCaller(headers: Headers, now: number): string {
-  const match = /^Bearer\s+([\w-]+)\.([\w-]+)\.(\S+)$/i.exec(headers.get("authorization")?.trim() ?? "");
+  // Cloud Run authenticates with X-Serverless-Authorization when present (as `gcloud run services
+  // proxy` sends it) and then passes Authorization through unchecked, so it must win.
+  const value = headers.get("x-serverless-authorization") ?? headers.get("authorization") ?? "";
+  const match = /^Bearer\s+([\w-]+)\.([\w-]+)\.(\S+)$/i.exec(value.trim());
   if (!match) throw new AuthError("no identity token");
   if (match[3] !== CLOUD_RUN_SIGNATURE_MARKER) throw new AuthError("the identity token did not pass Cloud Run's IAM check");
   let claims: Record<string, unknown>;

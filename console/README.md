@@ -139,6 +139,10 @@ The web role trusts the identity the platform verified, in one of two modes.
   - Cloud Run verifies the caller's Google ID token and forwards it with its signature
     replaced by `SIGNATURE_REMOVED_BY_GOOGLE`, so the console reads the caller's email from
     it without checking the signature again.
+  - The token arrives in `X-Serverless-Authorization`, which `gcloud run services proxy`
+    uses, or in `Authorization`. When both are present Cloud Run authenticates with
+    `X-Serverless-Authorization` and passes `Authorization` through unchecked, so the console
+    reads `X-Serverless-Authorization` first.
   - That is only safe while nobody can invoke the service without IAM. The console checks
     this itself: give the web service's account `roles/run.viewer` on the service. It
     refuses to start if `allUsers` or `allAuthenticatedUsers` can invoke it, or if the IAM
