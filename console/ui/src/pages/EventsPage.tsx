@@ -26,12 +26,13 @@ export function EventsPage() {
 
   const apply = (form: HTMLFormElement) => {
     const data = new FormData(form);
-    const next = new URLSearchParams();
+    const chosen = new URLSearchParams();
     for (const name of FILTER_NAMES) {
       const value = String(data.get(name) ?? "").trim();
-      if (value) next.set(name, value);
+      if (value) chosen.set(name, value);
     }
-    setSearch(next);
+    // The canonical query the API and the links use, with defaults left out.
+    setSearch(new URLSearchParams(eventFiltersQuery(parseEventFilters(chosen, UNUSED_NOW))));
   };
 
   return (

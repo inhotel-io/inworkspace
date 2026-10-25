@@ -56,19 +56,39 @@ operator's browser ──bearer token──▶ console, api role ──▶ Postg
 inWorkspace server ──event webhook (HMAC-signed)──▶ console, ingest role ──▶ Postgres
 ```
 
-The **web app** is a static bundle of HTML, JavaScript and CSS, built from `ui/` with Vite,
-React, React Router and Tailwind CSS.
-- The server hosts it as one of its web applications, the same mechanism that serves the web
-  admin at `/admin`.
-- The server downloads the bundle as a zip from a URL, keeps it in its blob store, and serves
-  its files under a path prefix. Unknown paths get `index.html`, whose `<base href="/">` the
-  server rewrites to the prefix. The app is built with relative asset paths, so it works under
-  any prefix. `/console` is the default.
-- Because the server serves the app, the app signs in against its own origin.
+The **web app** is built from `ui/` with Vite, React, React Router and Tailwind CSS, and it has
+two parts.
+
+- **The shell** is what the server hosts, as one of its web applications: the same mechanism
+  that serves the web admin at `/admin`.
+  - It is a single page, holding this deployment's settings and a content security policy, plus
+    the icon.
+  - The server downloads it as a zip from a URL, keeps it in its blob store, and serves it under
+    a path prefix, `/console` by default.
+  - Unknown paths also get the page. The server rewrites the page's `<base href="/">` to the
+    prefix, which is how the app learns its base path.
+  - Because the server serves the page, the app signs in against its own origin.
+- **The code** is served by the api role: the module `/ui/app/entry.js`, and the hashed files
+  under `/ui/app/assets/`.
+  - The shell loads the entry module from the API's origin. The module adds the stylesheets
+    and imports the current build.
+  - Browsers load module scripts with CORS, so these responses allow the server's origin.
+  - The entry module is revalidated on every load. The hashed files are cached for good.
+
+The server loads web applications only when it starts, or on its **Update apps** action
+(`x:Action` `UpdateApps`), never when a record is written. Update apps also downloads every
+application again from its `resourceUrl`, the web admin included.
+
+Keeping the code out of the shell therefore matters:
+- A new console version needs nothing on the server.
+- The shell changes only when its settings do, and only then does it need a new record and an
+  Update apps.
+- The app's routes live in the URL's hash, so no app path reaches the server's checks for
+  banned paths. The callback `/console/oauth/callback` is the only real path.
 
 One container image runs in one of two roles, chosen by `CONSOLE_ROLE`:
 
-- **api** serves the JSON API under `/api/v1/`, and the web app's bundle under `/ui/`.
+- **api** serves the JSON API under `/api/v1/`, and the web app's shell and code under `/ui/`.
   - Browsers call it from the server's origin, so it is publicly reachable.
   - Every API request must carry the operator's bearer token.
   - It holds the JMAP and database credentials, and never accepts webhook posts.
@@ -104,7 +124,7 @@ Each unit has one purpose and is tested on its own.
 | `auth` | Verify the operator's bearer token with the server: introspection, permissions and login. Check the required permission and the allow-list, and cache the result. | `config` |
 | `cors` | Cross-origin headers for the server's origin, and preflight answers. | — |
 | `apiRoute` | Wrap every API handler: role check, CORS, authentication, JSON errors, `no-store`. | `auth`, `cors` |
-| `uiBundle` | Turn the built web app into the zip the server downloads. It writes the runtime settings into `index.html` and gives the bundle a version. | `config` |
+| `uiBundle` | Build the shell zip the server downloads: the page with the settings, and the icon. It gets a version from its content. Also load the app's build: the entry module, generated from Vite's manifest, and the assets. | `config` |
 | `audit` | Write one structured log line for each conversation or thread view. | — |
 
 The web app has its own units, all under `ui/src/`:
@@ -313,9 +333,14 @@ Errors are `{"error": {"code", "message"}}`:
 | 502 | A mailbox read failed at the server. |
 | 503 | The server could not check the token. |
 
-`GET /ui/manifest` names the current bundle. `GET /ui/console-<version>.zip` returns it, and
-any version name returns the current bundle, so the server never gets a 404 when it fetches
-again.
+The web app's files, none of which needs a token:
+
+| Path | Answer |
+| --- | --- |
+| `GET /ui/manifest` | Names the current shell. |
+| `GET /ui/console-<version>.zip` | The shell. Any version name returns the current shell, so the server never gets a 404 when it fetches again. |
+| `GET /ui/app/entry.js` | The entry module. `no-cache`, with CORS for the server's origin. |
+| `GET /ui/app/assets/<file>` | Only the files the build produced. Cached for a year as immutable, with CORS for the server's origin. |
 
 ## Sign-in and access control
 
@@ -360,9 +385,10 @@ at most the 60-second cache described below.
   minutes.
 - No cookies are used, so cross-site request forgery does not apply.
 
-**The web app's page** carries a content security policy in a meta tag.
-- Scripts and styles come only from its own origin, API calls go only to the console API, and
-  images are only inline.
+**The shell page** carries a content security policy in a meta tag.
+- Scripts and styles come only from the console API's origin.
+- Calls go only to the page's own origin and the console API.
+- Images are only the page's own or inline.
 - Email frames inherit that policy and add their own.
 
 **Other controls.**
@@ -408,13 +434,16 @@ does the same idempotently — :
    level `info`, and the 39 subscribed types as an include list;
 3. registers the public OAuth client, with no secret and the single redirect URI
    `<server>/console/oauth/callback`;
-4. registers the web application at `/console`. The bundle URL is the api role's
-   `/ui/manifest` answer, fetched through the address the server uses to reach the api role.
-   - The server keeps one downloaded bundle per application record, so a new version gets a
-     new record: the script creates it first, then deletes the old one.
-   - Creating or deleting a record makes the server reload its web applications from their
-     stored bundles. The web admin is not downloaded again.
-   - The script only touches records whose prefix is the console's.
+4. registers the web application at `/console`, pointing at the shell that the api role's
+   `/ui/manifest` names. The URL uses the address the server uses to reach the api role.
+   - The server keeps one downloaded shell per application record, so a new shell gets a new
+     record. The script creates the new record first, then deletes the old one.
+   - The script only touches records whose only prefix is the console's.
+   - A new record is live only after the server restarts or runs Update apps. With
+     `UPDATE_APPS=1` the script runs Update apps. Otherwise it says the step is needed.
+   - **Before running Update apps, check the web admin's `resourceUrl`.** If it follows
+     `releases/latest`, the server downloads whatever web admin is newest, which may need a
+     newer server. Point it at the release the server already serves.
 5. reloads settings. Some server versions fail to reload because of an unrelated default
    setting; the webhook then becomes active at the next restart.
 
@@ -446,9 +475,12 @@ does the same idempotently — :
 - An end-to-end run against a real inWorkspace server in Docker:
   1. Create two agent mailboxes, a runtime principal, a plain user, the console principal
      and the webhook.
-  2. Register the OAuth client and the web application.
+  2. Register the OAuth client and the web application. Confirm that the server ignores the
+     record until Update apps, then serves the shell at `/console`. Confirm that the entry
+     module and an asset load from the API with CORS for the server's origin.
   3. Send messages over SMTP and reply from an agent mailbox over JMAP.
-  4. Confirm that the server serves the web app at `/console`.
+  4. Confirm that the shell is also served on the callback path, and that registering the same
+     shell again changes nothing.
   5. Sign in as the recovery administrator through the server's real `/api/auth` and
      `/auth/token` endpoints.
   6. Confirm that the API returns the conversation with an inbound and an outbound message,
@@ -463,6 +495,10 @@ from the same image, sharing a Postgres database:
 - The api role is publicly reachable; every API request needs a bearer token.
 - The ingest role is publicly reachable and protected by the signature.
 
-All secrets are supplied as environment variables from a secret manager. After deploying the
-api role, run the setup script so the server fetches the new bundle.
+All secrets are supplied as environment variables from a secret manager.
+
+A new console version needs only the deploy: the next page load picks up the new code. The
+setup script needs to run again only when the shell's settings change: the API's URL, the
+client id or the time zone. That needs one Update apps.
+
 Organization-specific values never belong in this repository.

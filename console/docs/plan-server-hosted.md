@@ -3490,12 +3490,13 @@ export function EventsPage() {
 
   const apply = (form: HTMLFormElement) => {
     const data = new FormData(form);
-    const next = new URLSearchParams();
+    const chosen = new URLSearchParams();
     for (const name of FILTER_NAMES) {
       const value = String(data.get(name) ?? "").trim();
-      if (value) next.set(name, value);
+      if (value) chosen.set(name, value);
     }
-    setSearch(next);
+    // The canonical query the API and the links use, with defaults left out.
+    setSearch(new URLSearchParams(eventFiltersQuery(parseEventFilters(chosen, UNUSED_NOW))));
   };
 
   return (
@@ -4010,7 +4011,7 @@ async function signIn(accountName, accountSecret) {
   const exchange = await fetch(`${SERVER}/auth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "authorization_code", code: answer.clientCode, redirect_uri: REDIRECT_URI, client_id: CLIENT_ID, code_verifier: verifier }),
+    body: new URLSearchParams({ grant_type: "authorization_code", code: answer.client_code, redirect_uri: REDIRECT_URI, client_id: CLIENT_ID, code_verifier: verifier }),
   });
   const tokens = await exchange.json().catch(() => ({}));
   if (!exchange.ok || typeof tokens.access_token !== "string") throw new Error(`the token exchange for ${accountName} failed: ${JSON.stringify(tokens)}`);
@@ -4197,7 +4198,7 @@ try {
   );
   expect(overview.totals.repliesSent >= 1, "the overview counts the agent's reply");
   const agentPath = `agents/${encodeURIComponent(AGENT)}/threads`;
-  const thread = (await apiJson(agentPath, token)).body.threads.find((candidate) => candidate.subject === "Late check-in on Friday?");
+  const thread = (await apiJson(agentPath, token)).body.threads.find((candidate) => candidate.subject.includes("Late check-in on Friday?"));
   expect(thread?.status === "answered", "the conversation is listed as answered");
   const messages = (await apiJson(`${agentPath}/${thread.threadId}`, token)).body.messages;
   expect(
@@ -4331,3 +4332,29 @@ Expected: all pass.
   - `BUNDLE_FILE` and the manifest's `file` match the setup script's pattern.
 - **Placeholders:** none. Task 11 describes the README changes rather than giving them in full,
   because they repeat the design text.
+
+## Revision after the first end-to-end run
+
+The first run showed that the server loads `x:Application` records only when it starts or on
+its Update apps action, never when a record is written. Update apps also downloads every
+application again, the web admin included.
+
+A bundle carrying the app's code would therefore need that action on every deploy. So the
+implementation changed from Tasks 5, 6, 9 and 10 as written above.
+
+- `src/lib/uiBundle.ts`:
+  - `buildUiShell` zips a shell: the page with the settings, and the icon. It changes only with
+    the settings.
+  - `loadUiApp` loads the build, and `entryModule` generates the module the shell loads.
+  - New routes serve the code with CORS for the server's origin: `src/app/ui/app/entry.js` and
+    `src/app/ui/app/assets/[file]`. Vite writes its manifest (`build.manifest`).
+- `scripts/server-setup.mjs` gains `updateApps`, which runs only with `UPDATE_APPS=1`.
+- The end-to-end harness:
+  - makes the record live with Update apps, and checks the entry module and an asset;
+  - reads the server's `client_code` field;
+  - matches the thread by a subject substring, because a summary carries the newest subject
+    (`Re: …`).
+- The events filter writes the canonical query.
+
+The repository's code is authoritative for these files; the blocks above show the first
+version.
