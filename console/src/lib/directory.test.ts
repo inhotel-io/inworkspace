@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchAgents, isAgentAddress, type DirectorySettings } from "./directory";
+import { decodeServerId, fetchAgents, isAgentAddress, type DirectorySettings } from "./directory";
 import type { Invocation } from "./jmap";
+
+describe("decodeServerId", () => {
+  it("decodes the server's base32 ids into the numbers its events carry", () => {
+    expect(decodeServerId("a")).toBe(0);
+    expect(decodeServerId("b")).toBe(1);
+    expect(decodeServerId("ba")).toBe(32);
+    expect(decodeServerId("3")).toBe(31);
+    expect(decodeServerId("")).toBeNull();
+    expect(decodeServerId("B")).toBeNull();
+    expect(decodeServerId("zzzzzzzzzzzz")).toBeNull();
+  });
+});
 
 const SETTINGS: DirectorySettings = {
   agentDomains: ["agents.example.test"],
@@ -48,8 +60,8 @@ describe("fetchAgents", () => {
     });
     const agents = await fetchAgents({ call }, { username: "console@agents.example.test", password: "x" }, SETTINGS);
     expect(agents).toEqual([
-      { address: "a000001e@agents.example.test", name: "Concierge agent" },
-      { address: "a21i3v9v@agents.example.test", name: "Front desk agent" },
+      { address: "a000001e@agents.example.test", name: "Concierge agent", accountId: 2 },
+      { address: "a21i3v9v@agents.example.test", name: "Front desk agent", accountId: 1 },
     ]);
     expect(call).toHaveBeenCalledTimes(2);
   });

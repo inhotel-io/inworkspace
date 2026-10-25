@@ -69,6 +69,21 @@ describe("buildThread", () => {
     expect(messages[2]?.truncated).toBe(false);
   });
 
+  it("marks drafts and deleted messages so they are not shown as sent replies", () => {
+    const [draft, deleted] = buildThread(
+      [
+        { ...fixture.thread[2]!, id: "draft", mailboxIds: { d: true }, receivedAt: "2026-10-25T11:17:10Z" },
+        { ...fixture.thread[0]!, id: "deleted", mailboxIds: { b: true }, receivedAt: "2026-10-25T11:18:35Z" },
+      ],
+      AGENT,
+      roles,
+      { sanitizeHtml: sanitizeEmailHtml, htmlToText },
+    );
+    expect([draft?.direction, draft?.draft, draft?.deleted]).toEqual(["outbound", true, false]);
+    expect([deleted?.direction, deleted?.draft, deleted?.deleted]).toEqual(["inbound", false, true]);
+    expect(messages.every((message) => !message.draft && !message.deleted)).toBe(true);
+  });
+
   it("falls back to text extracted from HTML", () => {
     const [message] = buildThread(
       [{ ...fixture.thread[1]!, textBody: [] }],

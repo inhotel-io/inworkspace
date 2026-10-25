@@ -67,12 +67,22 @@ async function Thread({ params }: Pick<Props, "params">) {
   );
 }
 
+function labelOf(message: ThreadMessage): string {
+  if (message.draft) return "Draft, not sent";
+  return message.direction === "outbound" ? "Agent reply" : "Inbound";
+}
+
 function Message({ message, timeZone }: { message: ThreadMessage; timeZone: string }) {
-  const outbound = message.direction === "outbound";
+  const outbound = message.direction === "outbound" && !message.draft;
   return (
-    <article className={`rounded-lg border p-4 ${outbound ? "border-brand/30 bg-brand-soft md:ml-16" : "border-border bg-surface md:mr-16"}`}>
+    <article
+      className={`rounded-lg border p-4 ${outbound ? "border-brand/30 bg-brand-soft md:ml-16" : "border-border bg-surface md:mr-16"} ${message.draft || message.deleted ? "border-dashed opacity-75" : ""}`}
+    >
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
-        <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">{outbound ? "Agent reply" : "Inbound"}</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">{labelOf(message)}</span>
+        {message.deleted ? (
+          <span className="rounded-full bg-surface-sunken px-2 py-0.5 text-xs font-medium text-text-muted">In Trash</span>
+        ) : null}
         <span className="font-medium">{formatAddress(message.from[0])}</span>
         <span className="text-text-muted">to {message.to.map(formatAddress).join(", ") || "—"}</span>
         {message.cc.length > 0 ? <span className="text-text-muted">cc {message.cc.map(formatAddress).join(", ")}</span> : null}

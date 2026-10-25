@@ -84,4 +84,26 @@ describe("normalizeEvent", () => {
   it("writes canonical JSON", () => {
     expect(canonicalJson({ b: [2, { y: 1, x: null }], a: "s" })).toBe('{"a":"s","b":[2,{"x":null,"y":1}]}');
   });
+
+  it("keeps the account that ingested a message", () => {
+    expect(rowOf("message-ingest.spam").accountId).toBe("1");
+    expect(rowOf("queue.authenticated-message-queued").accountId).toBeNull();
+  });
+});
+
+describe("NUL characters", () => {
+  // A remote server's reply text reaches `details` verbatim; Postgres text and jsonb cannot hold NUL.
+  it("strips real NUL characters from keys, values and the type", () => {
+    const [event] = parseBatch(
+      '{"events":[{"type":"delivery.failed\\u0000","createdAt":"2026-10-25T11:20:29Z","data":{"details":"550 \\u0000 no","k\\u0000":["\\u0000x"]}}]}',
+    );
+    expect(event).toEqual({ type: "delivery.failed", createdAt: "2026-10-25T11:20:29Z", data: { details: "550  no", k: ["x"] } });
+  });
+
+  it("keeps a literal backslash-u0000 text intact, and it serializes to valid JSON", () => {
+    const [event] = parseBatch('{"events":[{"type":"delivery.failed","createdAt":"2026-10-25T11:20:29Z","data":{"details":"550 \\\\u0000 rejected"}}]}');
+    const row = normalizeEvent(event!);
+    expect(row.data.details).toBe("550 \\u0000 rejected");
+    expect(JSON.parse(JSON.stringify(row.data))).toEqual({ details: "550 \\u0000 rejected" });
+  });
 });

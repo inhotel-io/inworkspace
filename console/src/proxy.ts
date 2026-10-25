@@ -19,6 +19,8 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   }
 }
 
+// The ingest route and the health check enforce the role themselves; keeping them out of the
+// proxy means large webhook bodies are never buffered by it.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/ingest/|healthz).*)"],
 };

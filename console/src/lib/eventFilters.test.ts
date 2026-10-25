@@ -23,6 +23,12 @@ describe("parseEventFilters", () => {
     });
   });
 
+  it("ignores windows that are object prototype keys", () => {
+    for (const window of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+      expect(parseEventFilters(params({ window }), NOW)).toEqual({ window: "24h", since: new Date("2026-10-24T12:00:00Z") });
+    }
+  });
+
   it("writes filters back to a query string", () => {
     expect(eventFiltersQuery({ typePrefix: "smtp.", severity: "warning", window: "1h" })).toBe("type=smtp.&severity=warning&window=1h");
     expect(eventFiltersQuery({ window: "24h" })).toBe("");

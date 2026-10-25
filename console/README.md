@@ -123,10 +123,21 @@ operator, agent and thread. `console.ingest.*` and `console.startup-failed` repo
 
 ## Security notes
 
+- **Every allowed operator can read every agent mailbox.** Any user account in
+  `AGENT_DOMAINS` that matches `AGENT_LOCALPART_PATTERN` is an agent. Keep human mailboxes out
+  of those domains, or narrow the pattern.
+- **The principal's password can impersonate any mailbox on the server**, not only agents.
+  The console limits itself to directory agents and read-only methods, but the secret does
+  not. Store it like an administrator credential and rotate it with `server-setup.mjs`.
 - The web role trusts only the identity in the proxy's signed assertion. It checks the
   signature, issuer, audience and expiry, then the allow-list, on every request and again in
   every page and API route.
 - Email HTML is sanitized on the server. It is shown in an `iframe` with an empty `sandbox`
   attribute, under a content security policy that blocks every remote resource, so tracking
   pixels never load.
-- The ingest role compares the HMAC signature in constant time and rejects bodies over 5 MB.
+- The ingest role compares the HMAC signature in constant time and rejects bodies over 25 MB.
+  After a failed post, the server folds the batch into later ones until its `discardAfter`
+  (one hour, as `server-setup.mjs` sets it). An outage of the console or its database
+  therefore loses at most an hour of events, and the merged batch stays well under the limit
+  at typical agent-mail volumes. Rejections are logged as `console.ingest.*` errors; alert on
+  them.

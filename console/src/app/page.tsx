@@ -39,35 +39,43 @@ async function OverviewContent() {
   const since = new Date(now.getTime() - DAY_MS);
   const directory = await settle(getAgents());
   const agents = directory.ok ? directory.value : [];
-  const addresses = agents.map((agent) => agent.address);
   const [counts, activity, errors] = await Promise.all([
-    overviewCounts(pool, { since, agentAddresses: addresses, agentDomains: config.agentDomains }),
-    agentActivity(pool, { since, agentAddresses: addresses }),
+    overviewCounts(pool, {
+      since,
+      agentAddresses: agents.map((agent) => agent.address),
+      agentAccountIds: agents.flatMap((agent) => (agent.accountId === null ? [] : [agent.accountId])),
+      agentDomains: config.agentDomains,
+    }),
+    agentActivity(pool, { since, agents }),
     queryEvents(pool, { severity: "error", limit: 20 }),
   ]);
   const activityByAddress = new Map(activity.map((row) => [row.address, row]));
+  // Without the agent list, counts that need it would read as zero; show them as unavailable instead.
+  const perAgent = (value: number) => (directory.ok ? value : null);
 
   return (
     <>
       {directory.ok ? null : (
-        <ErrorPanel title="The agent list is unavailable" detail={`${directory.error}. Per-agent counts are missing.`} />
+        <ErrorPanel title="The agent list is unavailable" detail={`${directory.error}. Counts that need it are shown as —.`} />
       )}
 
       <section aria-label="Counts" className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-7">
-        <StatCard label="Received" value={counts.received} />
-        <StatCard label="Filed as junk" value={counts.junk} tone="warning" />
+        <StatCard label="Received" value={perAgent(counts.received)} />
+        <StatCard label="Filed as junk" value={perAgent(counts.junk)} tone="warning" />
         <StatCard label="Refused at SMTP" value={counts.refused} tone="warning" />
-        <StatCard label="Replies sent" value={counts.repliesSent} />
-        <StatCard label="Replies delivered" value={counts.repliesDelivered} />
-        <StatCard label="Delivery problems" value={counts.deliveryProblems} tone="error" />
+        <StatCard label="Replies sent" value={perAgent(counts.repliesSent)} />
+        <StatCard label="Replies delivered" value={perAgent(counts.repliesDelivered)} />
+        <StatCard label="Delivery problems" value={perAgent(counts.deliveryProblems)} tone="error" />
         <StatCard label="Access problems" value={counts.accessProblems} tone="warning" />
       </section>
 
       <section aria-labelledby="agents-heading" className="overflow-hidden rounded-lg border border-border bg-surface">
         <h2 id="agents-heading" className="border-b border-border px-4 py-3 text-sm font-semibold">
-          Agents <span className="font-normal text-text-muted">({agents.length})</span>
+          Agents <span className="font-normal text-text-muted">({directory.ok ? agents.length : "—"})</span>
         </h2>
-        {agents.length === 0 ? (
+        {!directory.ok ? (
+          <p className="p-4 text-sm text-text-muted">The agent list could not be loaded from the mail server.</p>
+        ) : agents.length === 0 ? (
           <p className="p-4 text-sm text-text-muted">No agent mailboxes in {config.agentDomains.join(", ")}.</p>
         ) : (
           <div className="overflow-x-auto">

@@ -19,6 +19,14 @@ export function parsePosition(value: string | string[] | undefined): number {
   return Math.min(parsed, MAX_POSITION);
 }
 
+/** An event id for keyset paging: unlike a page position, it grows without bound. */
+export function parseEventId(value: string | string[] | undefined): number | null {
+  const raw = firstValue(value) ?? "";
+  if (!/^\d+$/.test(raw)) return null;
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 export function isThreadId(value: string): boolean {
   return /^[A-Za-z0-9_-]{1,64}$/.test(value);
 }

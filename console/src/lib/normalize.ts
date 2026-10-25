@@ -19,6 +19,8 @@ export interface EventRow {
   remoteIp: string | null;
   queueId: string | null;
   messageId: string | null;
+  /** The server's numeric id of the account a message was stored in (message-ingest events). */
+  accountId: string | null;
   data: Record<string, unknown>;
 }
 
@@ -52,6 +54,24 @@ function scalarOf(value: unknown): string | null {
   return null;
 }
 
+function integerOf(value: unknown): string | null {
+  const scalar = scalarOf(value);
+  return scalar !== null && /^\d{1,19}$/.test(scalar) ? scalar : null;
+}
+
+/**
+ * Postgres text and jsonb cannot hold NUL, and event values carry text from remote servers, so
+ * NUL is removed from every key and string before anything is derived or stored.
+ */
+function withoutNul(value: unknown): unknown {
+  if (typeof value === "string") return value.includes("\u0000") ? value.replaceAll("\u0000", "") : value;
+  if (Array.isArray(value)) return value.map(withoutNul);
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key.replaceAll("\u0000", ""), withoutNul(inner)]));
+  }
+  return value;
+}
+
 /** JSON with object keys sorted at every level, so equal data always hashes the same. */
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -74,7 +94,8 @@ export function parseBatch(text: string): WebhookEvent[] {
   if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
     throw new BatchError("the body is not an event batch");
   }
-  return parsed.events.map((event: unknown, index: number) => {
+  return parsed.events.map((raw: unknown, index: number) => {
+    const event = withoutNul(raw);
     if (
       !isRecord(event) ||
       typeof event.type !== "string" ||
@@ -105,6 +126,7 @@ export function normalizeEvent(event: WebhookEvent): EventRow {
     remoteIp: scalarOf(data.remoteIp),
     queueId: scalarOf(data.queueId),
     messageId: scalarOf(data.messageId),
+    accountId: event.type.startsWith("message-ingest.") ? integerOf(data.accountId) : null,
     data,
   };
 }

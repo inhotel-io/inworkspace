@@ -42,16 +42,26 @@ describe("ingest handler", () => {
     expect(d.insert).not.toHaveBeenCalled();
   });
 
-  it("answers 400 for a malformed batch", async () => {
-    expect((await createIngestHandler(deps())(post('{"nope":true}'))).status).toBe(400);
+  it("answers 400 for a malformed batch, and logs it", async () => {
+    const d = deps();
+    expect((await createIngestHandler(d)(post('{"nope":true}'))).status).toBe(400);
+    expect(d.log).toHaveBeenCalledWith(expect.objectContaining({ severity: "ERROR", message: "console.ingest.malformed" }));
   });
 
-  it("answers 413 for an oversized body, declared or streamed", async () => {
+  it("answers 413 for an oversized body, declared or streamed, and logs it", async () => {
     // Request strips a hand-set content-length, so the declared case uses a minimal stand-in.
     const declared = { headers: new Headers({ "content-length": String(MAX_INGEST_BYTES + 1) }), body: null } as unknown as Request;
-    expect((await createIngestHandler(deps())(declared)).status).toBe(413);
+    const d = deps();
+    expect((await createIngestHandler(d)(declared)).status).toBe(413);
+    expect(d.log).toHaveBeenCalledWith(expect.objectContaining({ severity: "ERROR", message: "console.ingest.too-large" }));
     const big = "x".repeat(MAX_INGEST_BYTES + 1);
     expect((await createIngestHandler(deps())(post(big, signBody(big, KEY)))).status).toBe(413);
+  });
+
+  it("still answers 204 when only the prune fails, since the events are stored", async () => {
+    const d = deps({ prune: vi.fn(async () => Promise.reject(new Error("statement timeout"))) });
+    expect((await createIngestHandler(d)(post(BODY))).status).toBe(204);
+    expect(d.log).toHaveBeenCalledWith(expect.objectContaining({ message: "console.ingest.prune-failed" }));
   });
 
   it("answers 503 when the store fails, so the server retries", async () => {

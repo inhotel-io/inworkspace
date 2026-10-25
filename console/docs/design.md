@@ -97,16 +97,20 @@ server adds `X-Signature`, the base64 HMAC-SHA256 of the body.
 
 The ingest role:
 
-1. rejects a body over 5 MB with 413, and a request without a valid signature with 401;
+1. rejects a body over 25 MB with 413, and a request without a valid signature with 401;
 2. rejects a body that is not an event batch with 400;
-3. normalizes every event and inserts the batch in one transaction, ignoring rows whose
-   dedupe hash already exists;
-4. answers 204 on success and 503 when the database is unavailable, so that the server
-   retries the batch.
+3. removes NUL characters from every key and string (Postgres cannot store them, and event
+   values carry text from remote servers), normalizes every event and inserts the batch in
+   one transaction, ignoring rows whose dedupe hash already exists;
+4. if Postgres rejects a row as invalid data, stores the rest of the batch row by row and
+   logs the rejected rows, so one bad row never blocks the stream;
+5. answers 204 on success and 503 when the database is unavailable, so that the server
+   retries the batch. A failing prune is logged and does not change the answer.
 
 The server re-serializes a failed batch with fresh `id` values, so `id` cannot detect a
 resend. The dedupe hash is SHA-256 over `createdAt`, `type` and the canonical JSON of
-`data`.
+`data`. The server also folds a failed batch into every later one until its `discardAfter`,
+which bounds how large a batch can grow after an outage. Every 413, 400 and 503 is logged.
 
 ### Subscribed event types
 
@@ -185,6 +189,13 @@ create index events_addresses_idx on events using gin (addresses);
 query. Migrations are applied in order at startup, under an advisory lock, and recorded in
 `schema_migrations`.
 
+Migration `002_events_account` adds `account_id bigint` (indexed where present): the
+server's numeric id of the account a `message-ingest.*` event stored the message in. Those
+events list every local recipient of the delivery in `to` — one message to two agents yields
+two events, each naming both — so counting by recipient would count it twice for each agent.
+The directory reads each agent's account id from the registry, whose ids are the same numbers
+written in the server's base32 alphabet `abcdefghijklmnopqrstuvwxyz792013`.
+
 Retention: rows older than `EVENT_RETENTION_DAYS` (default 30) are deleted at most once per
 hour per instance, during ingest requests.
 
@@ -211,8 +222,9 @@ keywords, so no message becomes seen.
   message is inbound and neither junk nor automated; *answered* when it is outbound.
 - **Thread view**: every message of the thread in time order, marked inbound or outbound
   (outbound when it is in Sent or sent by the agent), with sender, recipients, date, text
-  body, and the sanitized HTML body on request. Attachments are listed by name and size;
-  they are not downloadable in this version.
+  body, and the sanitized HTML body on request. A message in Drafts is labelled as a draft
+  that was never sent, and a message in Trash is marked as such. Attachments are listed by
+  name and size; they are not downloadable in this version.
 
 HTML bodies are sanitized on the server and rendered in an `iframe` with an empty `sandbox`
 attribute (no scripts, no same-origin) whose document carries a content security policy
@@ -224,8 +236,8 @@ Counts over the last 24 hours, from the event store:
 
 | Count | Definition |
 | --- | --- |
-| Received | `message-ingest.ham` with an agent among the recipients |
-| Filed as junk | `message-ingest.spam` with an agent among the recipients |
+| Received | `message-ingest.ham` stored in an agent's account |
+| Filed as junk | `message-ingest.spam` stored in an agent's account |
 | Refused at SMTP | the subscribed inbound refusal types, when a recipient is in an agent domain or the event has no recipient |
 | Replies sent | `queue.authenticated-message-queued` sent by an agent |
 | Replies delivered | `delivery.dsn-success` sent by an agent |
@@ -234,7 +246,8 @@ Counts over the last 24 hours, from the event store:
 
 Below the counts: one row per agent with its received, junk, replies-sent and error counts
 and its last activity, linking to its conversations; and the 20 most recent `error`
-events.
+events. When the agent directory cannot be read, the counts that depend on it show "—"
+instead of zero, next to an error panel.
 
 ## Events view
 
@@ -294,7 +307,8 @@ does the same idempotently — :
 ## Error handling
 
 - Ingest: 413 oversize, 401 bad signature, 400 malformed batch, 503 database unavailable,
-  204 success. Errors are logged without the body.
+  204 success. Every rejection is logged with its size or reason, never the body; rows
+  Postgres refuses are logged and skipped.
 - Web: a failed JMAP call renders an error state in the affected panel with the server's
   error type, and the rest of the page still renders. An unauthorized operator gets 403
   from the gate; an unknown agent or thread renders the not-found page (inside a streamed

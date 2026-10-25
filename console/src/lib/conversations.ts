@@ -64,6 +64,10 @@ export interface ThreadMessage {
   truncated: boolean;
   junk: boolean;
   automated: boolean;
+  /** In Drafts: written but never sent. */
+  draft: boolean;
+  /** In Trash. */
+  deleted: boolean;
   attachments: { name: string; size: number; type: string }[];
 }
 
@@ -161,6 +165,8 @@ export function buildThread(
         truncated: Object.values(email.bodyValues ?? {}).some((value) => value.isTruncated === true),
         junk: direction === "inbound" && isJunk(email, roles),
         automated: direction === "inbound" && isAutomated(email),
+        draft: roles.drafts !== null && Boolean(email.mailboxIds[roles.drafts]),
+        deleted: roles.trash !== null && Boolean(email.mailboxIds[roles.trash]),
         attachments: (email.attachments ?? []).map((part) => ({ name: part.name ?? "(unnamed)", size: part.size, type: part.type })),
       };
     });

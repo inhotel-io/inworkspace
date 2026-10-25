@@ -4,6 +4,23 @@ export interface Agent {
   address: string;
   /** The account's description, which the agent runtime sets to the agent's name. */
   name: string | null;
+  /** The account's numeric id, as the server's message-ingest events carry it. */
+  accountId: number | null;
+}
+
+const SERVER_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz792013";
+
+/** The server writes ids as base32 over its own alphabet; events carry the same ids as numbers. */
+export function decodeServerId(id: string): number | null {
+  if (id.length === 0) return null;
+  let value = 0;
+  for (const character of id) {
+    const digit = SERVER_ID_ALPHABET.indexOf(character);
+    if (digit < 0) return null;
+    value = value * 32 + digit;
+    if (!Number.isSafeInteger(value)) return null;
+  }
+  return value;
 }
 
 export interface DirectorySettings {
@@ -46,12 +63,12 @@ export async function fetchAgents(
         "ag",
       ],
     ]);
-    const accounts = responseOf(responses, "ag").list as { name: string; description?: string | null; "@type"?: string }[];
+    const accounts = responseOf(responses, "ag").list as { id: string; name: string; description?: string | null; "@type"?: string }[];
     for (const account of accounts) {
       if (account["@type"] !== undefined && account["@type"] !== "User") continue;
       const address = `${account.name}@${domain.name}`.toLowerCase();
       if (isAgentAddress(address, settings)) {
-        agents.push({ address, name: account.description?.trim() || null });
+        agents.push({ address, name: account.description?.trim() || null, accountId: decodeServerId(account.id) });
       }
     }
   }

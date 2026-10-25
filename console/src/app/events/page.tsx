@@ -9,7 +9,7 @@ import { getPool } from "@/lib/db";
 import { EVENT_TYPE_PREFIXES, EVENT_WINDOWS, eventFiltersQuery, parseEventFilters } from "@/lib/eventFilters";
 import { queryEvents } from "@/lib/eventStore";
 import { requireOperator } from "@/lib/operator";
-import { firstValue, parsePosition } from "@/lib/params";
+import { firstValue, parseEventId } from "@/lib/params";
 import { getAgents } from "@/lib/services";
 import { settle } from "@/lib/settle";
 
@@ -38,7 +38,7 @@ async function EventsContent({ searchParams }: Pick<Props, "searchParams">) {
   const query = await searchParams;
   const reader = { get: (name: string) => firstValue(query[name]) };
   const filters = parseEventFilters(reader, new Date());
-  const before = parsePosition(query.before);
+  const before = parseEventId(query.before) ?? 0;
   const config = getConfig();
   const [events, directory] = await Promise.all([
     queryEvents(getPool(), { ...filters, beforeId: before > 0 ? before : undefined, limit: PAGE_SIZE }),
@@ -106,7 +106,8 @@ async function EventsContent({ searchParams }: Pick<Props, "searchParams">) {
         </Link>
       </form>
 
-      {before === 0 ? <LiveEvents initialAfter={newestId} query={filterQuery} timeZone={config.displayTimeZone} /> : null}
+      {/* Keyed by the filters: navigating to other filters keeps client state otherwise. */}
+      {before === 0 ? <LiveEvents key={filterQuery} initialAfter={newestId} query={filterQuery} timeZone={config.displayTimeZone} /> : null}
 
       <section aria-label="Events" className="overflow-hidden rounded-lg border border-border bg-surface">
         {events.length === 0 ? (

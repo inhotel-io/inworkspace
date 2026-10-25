@@ -30,6 +30,15 @@ export const MIGRATIONS: readonly Migration[] = [
       create index events_addresses_idx on events using gin (addresses);
     `,
   },
+  {
+    // message-ingest events list every local recipient of a delivery, so the mailbox that stored
+    // the message is identified by the server's account id instead.
+    version: "002_events_account",
+    sql: `
+      alter table events add column account_id bigint;
+      create index events_account_idx on events (account_id, event_at desc) where account_id is not null;
+    `,
+  },
 ];
 
 const MIGRATION_LOCK = 7_302_025;

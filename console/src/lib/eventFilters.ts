@@ -25,7 +25,7 @@ export function parseEventFilters(params: ParamReader, now: Date): EventFilters 
   const agent = params.get("agent")?.trim().toLowerCase() ?? "";
   if (/^[^\s@]+@[^\s@]+$/.test(agent)) filters.address = agent;
   const window = params.get("window") ?? "";
-  if (window in EVENT_WINDOWS) filters.window = window as EventWindow;
+  if (Object.hasOwn(EVENT_WINDOWS, window)) filters.window = window as EventWindow;
   filters.since = new Date(now.getTime() - EVENT_WINDOWS[filters.window]);
   return filters;
 }

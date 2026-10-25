@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { decodeAddressParam, firstValue, isThreadId, parsePosition } from "./params";
+import { decodeAddressParam, firstValue, isThreadId, parseEventId, parsePosition } from "./params";
+
+describe("parseEventId", () => {
+  it("accepts any positive safe integer, without the page-position cap", () => {
+    expect(parseEventId("250000")).toBe(250000);
+    expect(parseEventId(["7", "9"])).toBe(7);
+    expect(parseEventId("9007199254740991")).toBe(9007199254740991);
+  });
+
+  it("rejects anything else", () => {
+    for (const value of [undefined, "", "0", "-1", "1.5", "1e6", "abc", "9007199254740992"]) {
+      expect(parseEventId(value)).toBeNull();
+    }
+  });
+});
 
 describe("route params", () => {
   it("decodes an address segment", () => {
