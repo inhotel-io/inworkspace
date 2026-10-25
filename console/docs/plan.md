@@ -4187,8 +4187,10 @@ git commit -m "feat(console): conversation list and thread view"
 
 - [ ] **Step 1: JSON API** — `src/app/api/events/route.ts`
 
+With Cache Components a GET handler is prerendered at build time unless it reaches request data first, so it starts with `connection()`:
+
 ```ts
-import type { NextRequest } from "next/server";
+import { connection, type NextRequest } from "next/server";
 import { AuthError, authenticate } from "@/lib/auth";
 import { getConfig, servesWeb } from "@/lib/config";
 import { getPool } from "@/lib/db";
@@ -4196,6 +4198,8 @@ import { parseEventFilters } from "@/lib/eventFilters";
 import { queryEvents } from "@/lib/eventStore";
 
 export async function GET(request: NextRequest): Promise<Response> {
+  // Never prerender: everything below depends on the request and on runtime configuration.
+  await connection();
   const config = getConfig();
   if (!servesWeb(config)) return new Response(null, { status: 404 });
   try {
