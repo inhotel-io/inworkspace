@@ -1,90 +1,150 @@
-import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from "jose";
-import type { ConsoleConfig } from "./config";
-
-export const IAP_ISSUER = "https://cloud.google.com/iap";
-export const IAP_ASSERTION_HEADER = "x-goog-iap-jwt-assertion";
+import { createHash } from "node:crypto";
 
 export interface Operator {
-  email: string;
+  /** The account's login at the server, lowercased. */
+  login: string;
 }
 
 export class AuthError extends Error {
-  constructor(message: string) {
+  constructor(
+    readonly status: 401 | 403,
+    message: string,
+  ) {
     super(message);
     this.name = "AuthError";
   }
 }
 
-type AuthSettings = Pick<ConsoleConfig, "authMode" | "iapAudience" | "iapJwksUrl" | "allowedEmails" | "allowedDomains">;
-
-let remoteKeys: { url: string; keys: JWTVerifyGetKey } | undefined;
-
-function keysFor(url: string): JWTVerifyGetKey {
-  if (remoteKeys?.url !== url) remoteKeys = { url, keys: createRemoteJWKSet(new URL(url)) };
-  return remoteKeys.keys;
+export class RateLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RateLimitError";
+  }
 }
 
-export function isAllowed(email: string, allowedEmails: readonly string[], allowedDomains: readonly string[]): boolean {
-  const normalized = email.toLowerCase();
-  const domain = normalized.slice(normalized.lastIndexOf("@") + 1);
-  return allowedEmails.includes(normalized) || allowedDomains.includes(domain);
+/** The server could not be asked about the token; the token itself may be fine. */
+export class VerifierUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VerifierUnavailableError";
+  }
 }
 
-/** What Cloud Run puts in place of the signature of a token it has verified, before forwarding it. */
-export const CLOUD_RUN_SIGNATURE_MARKER = "SIGNATURE_REMOVED_BY_GOOGLE";
-const GOOGLE_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
+export type TokenVerifier = (headers: Headers) => Promise<Operator>;
+
+export interface VerifierOptions {
+  /** Origin of the inWorkspace server that issued the token. */
+  serverUrl: string;
+  /** The console principal, which introspects tokens. */
+  principal: { username: string; password: string };
+  permission: string;
+  allowedAccounts: readonly string[];
+  fetch?: typeof fetch;
+  now?: () => number;
+  cacheMs?: number;
+  maxCacheEntries?: number;
+  introspectionsPerMinute?: number;
+  timeoutMs?: number;
+}
+
+/** For AUTH_MODE=none: every request is this operator. */
+export const LOCAL_OPERATOR: Operator = { login: "local-operator" };
+
+// RFC 6750 b64token, and short enough for the server's 1,024-byte introspection form.
+const BEARER = /^Bearer\s+([A-Za-z0-9\-._~+/]+=*)$/i;
+const MAX_TOKEN_LENGTH = 1000;
+const MINUTE_MS = 60_000;
+
+export function bearerToken(headers: Headers): string {
+  const match = BEARER.exec(headers.get("authorization")?.trim() ?? "");
+  const token = match?.[1];
+  if (!token || token.length > MAX_TOKEN_LENGTH) throw new AuthError(401, "sign-in required");
+  return token;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
- * AUTH_MODE=cloud-run: Cloud Run's IAM check has already verified the caller's Google ID token,
- * and forwards it with the signature replaced, so the signature cannot be checked again here. The
- * claims are trusted only because the service is private: `cloudRunGuard` stops the process if the
- * service ever becomes publicly invokable.
+ * Verifies the operator's access token with the server that issued it.
+ *
+ * The token is first introspected as the console principal. An invalid token is therefore never
+ * presented to the server as a login, and failed logins cannot get this service's address banned.
+ * Only an active token is used, to read the account's permissions and login.
  */
-function cloudRunCaller(headers: Headers, now: number): string {
-  // Cloud Run authenticates with X-Serverless-Authorization when present (as `gcloud run services
-  // proxy` sends it) and then passes Authorization through unchecked, so it must win.
-  const value = headers.get("x-serverless-authorization") ?? headers.get("authorization") ?? "";
-  const match = /^Bearer\s+([\w-]+)\.([\w-]+)\.(\S+)$/i.exec(value.trim());
-  if (!match) throw new AuthError("no identity token");
-  if (match[3] !== CLOUD_RUN_SIGNATURE_MARKER) throw new AuthError("the identity token did not pass Cloud Run's IAM check");
-  let claims: Record<string, unknown>;
-  try {
-    claims = JSON.parse(Buffer.from(match[2]!, "base64url").toString("utf8")) as Record<string, unknown>;
-  } catch {
-    throw new AuthError("the identity token is unreadable");
-  }
-  if (typeof claims.iss !== "string" || !GOOGLE_ISSUERS.has(claims.iss)) throw new AuthError("the identity token is not from Google");
-  if (typeof claims.exp !== "number" || claims.exp * 1000 <= now) throw new AuthError("the identity token has expired");
-  if (claims.email_verified !== true || typeof claims.email !== "string" || !claims.email) {
-    throw new AuthError("the identity token has no verified email");
-  }
-  return claims.email.toLowerCase();
-}
+export function createTokenVerifier(options: VerifierOptions): TokenVerifier {
+  const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? Date.now;
+  const cacheMs = options.cacheMs ?? MINUTE_MS;
+  const maxCacheEntries = options.maxCacheEntries ?? 1000;
+  const limit = options.introspectionsPerMinute ?? 120;
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const basic = `Basic ${Buffer.from(`${options.principal.username}:${options.principal.password}`).toString("base64")}`;
+  const cache = new Map<string, { operator: Operator; expiresAt: number }>();
+  let window = { startedAt: Number.NEGATIVE_INFINITY, count: 0 };
 
-/** Resolves the operator from the platform's identity assertion and checks the allow-list; throws AuthError otherwise. */
-export async function authenticate(headers: Headers, settings: AuthSettings, keys?: JWTVerifyGetKey): Promise<Operator> {
-  if (settings.authMode === "none") return { email: "local-operator" };
-  if (settings.authMode === "cloud-run") {
-    const email = cloudRunCaller(headers, Date.now());
-    if (!isAllowed(email, settings.allowedEmails, settings.allowedDomains)) throw new AuthError(`${email} is not allowed`);
-    return { email };
-  }
-  const token = headers.get(IAP_ASSERTION_HEADER);
-  if (!token) throw new AuthError("no identity assertion");
-
-  let payload: JWTPayload;
-  try {
-    ({ payload } = await jwtVerify(token, keys ?? keysFor(settings.iapJwksUrl), {
-      issuer: IAP_ISSUER,
-      audience: settings.iapAudience,
-      algorithms: ["ES256"],
-    }));
-  } catch (error) {
-    throw new AuthError(`invalid identity assertion: ${error instanceof Error ? error.message : String(error)}`);
+  async function ask(path: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetchImpl(`${options.serverUrl}${path}`, { ...init, cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
+    } catch (error) {
+      throw new VerifierUnavailableError(`the mail server did not answer ${path}: ${messageOf(error)}`);
+    }
   }
 
-  const email = typeof payload.email === "string" ? payload.email.toLowerCase() : "";
-  if (!email) throw new AuthError("the identity assertion has no email");
-  if (!isAllowed(email, settings.allowedEmails, settings.allowedDomains)) throw new AuthError(`${email} is not allowed`);
-  return { email };
+  function countIntrospection(at: number): void {
+    if (at - window.startedAt >= MINUTE_MS) window = { startedAt: at, count: 0 };
+    if (window.count >= limit) throw new RateLimitError("Too many sign-in checks. Try again in a minute.");
+    window.count += 1;
+  }
+
+  return async function verify(headers: Headers): Promise<Operator> {
+    const token = bearerToken(headers);
+    const key = createHash("sha256").update(token).digest("base64url");
+    const at = now();
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > at) return cached.operator;
+    cache.delete(key);
+
+    countIntrospection(at);
+    const introspection = await ask("/auth/introspect", {
+      method: "POST",
+      headers: { Authorization: basic, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }).toString(),
+    });
+    if (!introspection.ok) {
+      throw new VerifierUnavailableError(`token introspection answered HTTP ${introspection.status}`);
+    }
+    const state = (await introspection.json()) as { active?: unknown; exp?: unknown };
+    if (state.active !== true) throw new AuthError(401, "the session has ended or is not valid");
+
+    const asOperator = { headers: { Authorization: `Bearer ${token}` } };
+    const [account, session] = await Promise.all([ask("/api/account", asOperator), ask("/jmap/session", asOperator)]);
+    if (account.status === 401 || session.status === 401) throw new AuthError(401, "the session has ended or is not valid");
+    if (!account.ok || !session.ok) {
+      throw new VerifierUnavailableError(`reading the account answered HTTP ${account.ok ? session.status : account.status}`);
+    }
+    const { permissions } = (await account.json()) as { permissions?: unknown };
+    const { username } = (await session.json()) as { username?: unknown };
+    if (!Array.isArray(permissions) || typeof username !== "string" || username.length === 0) {
+      throw new VerifierUnavailableError("the mail server's account answer has no permissions or login");
+    }
+
+    const login = username.toLowerCase();
+    if (!permissions.includes(options.permission)) {
+      throw new AuthError(403, `${login} does not have the ${options.permission} permission`);
+    }
+    if (options.allowedAccounts.length > 0 && !options.allowedAccounts.includes(login)) {
+      throw new AuthError(403, `${login} is not allowed to use the console`);
+    }
+
+    const operator = { login };
+    const expiresAt = Math.min(at + cacheMs, typeof state.exp === "number" ? state.exp * 1000 : Number.POSITIVE_INFINITY);
+    if (cache.size >= maxCacheEntries) {
+      const oldest = cache.keys().next();
+      if (!oldest.done) cache.delete(oldest.value);
+    }
+    cache.set(key, { operator, expiresAt });
+    return operator;
+  };
 }
