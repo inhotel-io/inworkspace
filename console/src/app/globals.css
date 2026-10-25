@@ -1,26 +1,68 @@
 @import "tailwindcss";
 
+/* inHotel palette primitives; the error red is a semantic color, not a brand color. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --surface: #ffffff;
+  --surface-muted: #f7f7f7;
+  --surface-sunken: #ececec;
+  --border: #d9d9d9;
+  --text: #0f0f0f;
+  --text-muted: #5c5c5c;
+  --brand: #397959;
+  --brand-strong: #26503b;
+  --brand-soft: #e6f3ed;
+  --info: #34457a;
+  --info-soft: #e5e9f4;
+  --warning: #885e2b;
+  --warning-soft: #f6eee4;
+  --error: #b42318;
+  --error-soft: #fdecea;
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --surface: #0f0f0f;
+    --surface-muted: #020202;
+    --surface-sunken: #292929;
+    --border: #424242;
+    --text: #ececec;
+    --text-muted: #a6a6a6;
+    --brand: #82c4a3;
+    --brand-strong: #a1d3ba;
+    --brand-soft: #142a1f;
+    --info: #7e91c8;
+    --info-soft: #111627;
+    --warning: #d3a873;
+    --warning-soft: #2f200f;
+    --error: #f97066;
+    --error-soft: #3b1513;
+    color-scheme: dark;
   }
 }
 
+@theme inline {
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-error: var(--error);
+  --color-error-soft: var(--error-soft);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: var(--font-sans);
 }
