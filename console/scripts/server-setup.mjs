@@ -395,7 +395,7 @@ async function main() {
       token: required("METRICS_PUSH_TOKEN"),
       replace: process.env.METRICS_PUSH_REPLACE === "1",
     });
-    console.log(`metrics push set to ${metricsUrl}, every minute`);
+    console.log(`metrics push set to ${metricsUrl}, every minute; the server starts pushing at its next restart`);
   }
 
   const path = appPrefix(process.env.CONSOLE_PATH ?? "console");
