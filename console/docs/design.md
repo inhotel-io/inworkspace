@@ -578,6 +578,8 @@ The console replaces the data, not the screens.
     means a restart.
   - A series first seen long after its start becomes a baseline only, so enabling the push
     does not show everything since the last restart as one spike.
+  - The server schedules its first push when its task scheduler starts. A settings reload sets
+    the push up but schedules nothing, so pushes begin at the next restart.
 - **Histograms keep running totals.** The dashboards take the difference between consecutive
   samples themselves.
   - So the console keeps totals that only grow, even across restarts.

@@ -180,6 +180,11 @@ from the server's event table.
 refuse the reload because of an unrelated setting. The script says so, and the webhook then
 becomes active at the next restart.
 
+**The metrics push starts only at a restart.** A reload sets the push up, but the server
+schedules its first push when its task scheduler starts, so pushes begin at the next restart.
+That includes the queue's size, which the ingest counts with each push. The tracing webhook
+needs no restart.
+
 ## The web admin's Dashboard, Live Tracing and History
 
 On the community edition, the web admin locks the Dashboard, Observability → Live Tracing and
