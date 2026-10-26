@@ -47,6 +47,9 @@ export function describeEvent(event: { sender: string | null; recipients: string
   if (event.sender || event.recipients.length > 0) {
     parts.push(`${event.sender ?? "—"} → ${event.recipients.join(", ") || "—"}`);
   }
+  // A failed sign-in names the login that was tried; a scan ban, the page that was probed.
+  if (typeof event.data.accountName === "string" && event.data.accountName) parts.push(`as ${event.data.accountName}`);
+  if (typeof event.data.path === "string" && event.data.path) parts.push(`asked for ${event.data.path}`);
   const detail = event.data.details ?? event.data.reason;
   if (typeof detail === "string" && detail) parts.push(detail);
   if (typeof event.data.code === "number") parts.push(`code ${event.data.code}`);

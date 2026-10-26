@@ -190,7 +190,7 @@ reaches the console:
   `smtp.rcpt-to-greylisted`, `smtp.message-too-large`, `smtp.rate-limit-exceeded`,
   `smtp.loop-detected`, `smtp.message-parse-failed`; and the sender's domain failing DMARC:
   `smtp.dmarc-fail`.
-- Access problems: `auth.failed`, `auth.too-many-attempts`, `security.authentication-ban`,
+- Sign-ins and bans: `auth.failed`, `auth.too-many-attempts`, `security.authentication-ban`,
   `security.abuse-ban`, `security.ip-blocked`, `security.scan-ban`,
   `security.loiter-ban`, `security.unauthorized`.
 
@@ -307,7 +307,7 @@ Counts over the last 24 hours, from the event store:
 | Sent | `queue.authenticated-message-queued` sent by a listed mailbox |
 | Delivered | `delivery.dsn-success` sent by a listed mailbox |
 | Delivery problems | `delivery.failed`, `delivery.dsn-temp-fail`, `delivery.dsn-perm-fail`, `delivery.double-bounce`, `delivery.rcpt-to-rejected`, `delivery.rcpt-to-failed`, `delivery.message-rejected` sent by a listed mailbox |
-| Access problems | the subscribed `auth.*` and `security.*` types |
+| Access problems | failed sign-ins (`auth.failed`, `auth.too-many-attempts`, and `security.unauthorized` for an expired or removed credential) and new bans (`security.authentication-ban`, `security.abuse-ban`, `security.scan-ban`, `security.loiter-ban`). A connection from an address that is already banned (`security.ip-blocked`) is left out: it is the ban working, and it would drown out the rest. The card opens these events. |
 
 Below the counts: one row per listed mailbox with its received, junk, sent and error counts
 and its last activity, most recently active first, linking to its conversations; and the 20
@@ -318,9 +318,11 @@ too, unless `MAILBOX_DOMAINS` names the domains to match refusals against.
 
 ## Events view
 
-A table of events, newest first, filtered by type prefix, severity, mailbox and time window,
+A table of events, newest first, filtered by type prefix or group (`access`: the events the
+*Access problems* count is made of), severity, mailbox and time window,
 100 per page, with keyset paging. A live mode polls `GET /api/v1/events?after=<id>` every
-three seconds and prepends new rows. Each row expands to its full JSON.
+three seconds and prepends new rows. Each row describes the event in a line, with the login a
+failed sign-in tried and the page a scan probed, and expands to its full JSON.
 
 ## API
 
@@ -334,7 +336,7 @@ needs a verified operator.
 | `mailboxes` | The listed mailboxes: address and name. |
 | `mailboxes/{address}/threads?position=&refresh=` | One page of the mailbox's threads. 404 for an address that is not listed. `refresh=1` marks a reload the web app made by itself. |
 | `mailboxes/{address}/threads/{threadId}` | Every message of the thread. 404 when the thread is not in that mailbox. |
-| `events?type=&severity=&mailbox=&window=&before=&after=` | Events, newest first. `before` pages back, `after` returns only newer events for live mode. `agent=` is read as `mailbox=`. |
+| `events?type=&group=&severity=&mailbox=&window=&before=&after=` | Events, newest first. `group=access` keeps the types the *Access problems* count is made of. `before` pages back, `after` returns only newer events for live mode. `agent=` is read as `mailbox=`. |
 
 Errors are `{"error": {"code", "message"}}`:
 

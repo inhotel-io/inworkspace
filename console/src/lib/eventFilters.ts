@@ -1,4 +1,4 @@
-import type { Severity } from "./eventTypes";
+import { EVENT_GROUPS, type EventGroup, type Severity } from "./eventTypes";
 
 export const EVENT_WINDOWS = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000 } as const;
 export type EventWindow = keyof typeof EVENT_WINDOWS;
@@ -6,6 +6,7 @@ export const EVENT_TYPE_PREFIXES = ["message-ingest.", "queue.", "delivery.", "s
 
 export interface EventFilters {
   typePrefix?: string;
+  group?: EventGroup;
   severity?: Severity;
   address?: string;
   window: EventWindow;
@@ -20,6 +21,8 @@ export function parseEventFilters(params: ParamReader, now: Date): EventFilters 
   const filters: EventFilters = { window: "24h", since: new Date(0) };
   const type = params.get("type")?.trim() ?? "";
   if (/^[a-z0-9.-]{1,80}$/.test(type)) filters.typePrefix = type;
+  const group = params.get("group") ?? "";
+  if (Object.hasOwn(EVENT_GROUPS, group)) filters.group = group as EventGroup;
   const severity = params.get("severity");
   if (severity === "info" || severity === "warning" || severity === "error") filters.severity = severity;
   // "agent" is the name links used before 0.4.
@@ -35,6 +38,7 @@ export function parseEventFilters(params: ParamReader, now: Date): EventFilters 
 export function eventFiltersQuery(filters: Omit<EventFilters, "since">): string {
   const params = new URLSearchParams();
   if (filters.typePrefix) params.set("type", filters.typePrefix);
+  if (filters.group) params.set("group", filters.group);
   if (filters.severity) params.set("severity", filters.severity);
   if (filters.address) params.set("mailbox", filters.address);
   if (filters.window !== "24h") params.set("window", filters.window);

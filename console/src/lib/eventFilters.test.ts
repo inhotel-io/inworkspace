@@ -23,6 +23,13 @@ describe("parseEventFilters", () => {
     });
   });
 
+  it("accepts a group of types, and ignores names that are not groups", () => {
+    expect(parseEventFilters(params({ group: "access" }), NOW).group).toBe("access");
+    for (const group of ["refusal", "toString", "__proto__", ""]) {
+      expect(parseEventFilters(params({ group }), NOW).group).toBeUndefined();
+    }
+  });
+
   it("still reads the mailbox from links made before 0.4", () => {
     expect(parseEventFilters(params({ agent: "a@example.test" }), NOW).address).toBe("a@example.test");
   });
@@ -37,5 +44,6 @@ describe("parseEventFilters", () => {
     expect(eventFiltersQuery({ typePrefix: "smtp.", severity: "warning", window: "1h" })).toBe("type=smtp.&severity=warning&window=1h");
     expect(eventFiltersQuery({ address: "a@example.test", window: "24h" })).toBe("mailbox=a%40example.test");
     expect(eventFiltersQuery({ window: "24h" })).toBe("");
+    expect(eventFiltersQuery({ group: "access", window: "24h" })).toBe("group=access");
   });
 });

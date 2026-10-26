@@ -81,7 +81,7 @@ function OverviewContent({ data, loadedAt }: { data: OverviewResponse; loadedAt:
         <StatCard label="Sent" value={totals.sent} />
         <StatCard label="Delivered" value={totals.delivered} />
         <StatCard label="Delivery problems" value={totals.deliveryProblems} tone="error" />
-        <StatCard label="Access problems" value={totals.accessProblems} tone="warning" />
+        <StatCard label="Access problems" value={totals.accessProblems} tone="warning" to="/events?group=access" />
       </section>
 
       <section aria-labelledby="mailboxes-heading" className="overflow-hidden rounded-lg border border-border bg-surface">

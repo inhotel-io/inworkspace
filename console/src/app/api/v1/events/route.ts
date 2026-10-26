@@ -4,6 +4,7 @@ import type { EventsResponse } from "@/lib/apiTypes";
 import { getPool } from "@/lib/db";
 import { parseEventFilters } from "@/lib/eventFilters";
 import { queryEvents } from "@/lib/eventStore";
+import { EVENT_GROUPS } from "@/lib/eventTypes";
 import { parseEventId } from "@/lib/params";
 
 const PAGE_SIZE = 100;
@@ -27,7 +28,8 @@ export const GET = apiRoute(async ({ request }): Promise<EventsResponse> => {
     throw new ApiError(400, "bad_request", "use before or after, not both");
   }
   const limit = afterId === undefined ? PAGE_SIZE : LIVE_LIMIT;
-  const events = await queryEvents(getPool(), { ...filters, beforeId, afterId, limit });
+  const { group, ...rest } = filters;
+  const events = await queryEvents(getPool(), { ...rest, types: group ? EVENT_GROUPS[group] : undefined, beforeId, afterId, limit });
   return { events, pageSize: limit };
 });
 export const OPTIONS = apiPreflight;

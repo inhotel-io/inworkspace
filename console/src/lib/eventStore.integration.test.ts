@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { insertEvents, mailboxActivity, overviewCounts, pruneEvents, queryEvents } from "./eventStore";
+import { ACCESS_EVENT_TYPES } from "./eventTypes";
 import { migrate } from "./migrations";
 import { normalizeEvent, parseBatch, type EventRow } from "./normalize";
 
@@ -54,6 +55,16 @@ describe("event store", () => {
     const ghost = await queryEvents(pool, { address: "GHOST@agents.example.test", limit: 50 });
     expect(ghost.map((event) => event.type)).toEqual(["smtp.mailbox-does-not-exist"]);
     expect(await queryEvents(pool, { typePrefix: "queue%", limit: 50 })).toEqual([]);
+  });
+
+  it("counts failed sign-ins and new bans as access problems, and finds them by type", async () => {
+    const access = (type: string, second: number) =>
+      normalizeEvent({ createdAt: `2026-10-25T11:40:0${second}Z`, type, data: { remoteIp: "198.51.100.7" } });
+    await insertEvents(pool, [access("auth.failed", 1), access("security.scan-ban", 2), access("security.ip-blocked", 3), access("security.ip-blocked", 4)]);
+    const counts = await overviewCounts(pool, { since: SINCE, addresses: [], accountIds: [], domains: [] });
+    expect(counts.accessProblems).toBe(2);
+    const found = await queryEvents(pool, { types: ACCESS_EVENT_TYPES, limit: 50 });
+    expect(found.map((event) => event.type)).toEqual(["security.scan-ban", "auth.failed"]);
   });
 
   it("returns stored events with exact ids and data", async () => {
