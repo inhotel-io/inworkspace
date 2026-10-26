@@ -1,3 +1,5 @@
+import { Link } from "react-router";
+
 type Tone = "neutral" | "warning" | "error";
 
 const TONE_CLASSES: Record<Tone, string> = {
@@ -6,11 +8,20 @@ const TONE_CLASSES: Record<Tone, string> = {
   error: "text-error",
 };
 
-/** A count; warning and error tones only colour non-zero values, and null means it could not be computed. */
-export function StatCard({ label, value, tone = "neutral" }: { label: string; value: number | null; tone?: Tone }) {
-  return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-text-muted">{label}</p>
+const CARD_CLASSES = "rounded-lg border border-border bg-surface p-4";
+
+/**
+ * A count; warning and error tones only colour non-zero values, and null means it could not be computed.
+ * With `to`, the card opens the events it counts.
+ */
+export function StatCard({ label, value, tone = "neutral", to }: { label: string; value: number | null; tone?: Tone; to?: string }) {
+  const content = (
+    <>
+      <p className="text-xs font-medium uppercase tracking-wide text-text-muted">
+        {label}
+        {/* Kept with the last word, so a long label wraps as the others do. */}
+        {to ? <span aria-hidden="true">{"\u00a0→"}</span> : null}
+      </p>
       {value === null ? (
         <p className="mt-2 text-3xl font-semibold text-text-muted" title="Unavailable without the mailbox list">
           —
@@ -20,6 +31,13 @@ export function StatCard({ label, value, tone = "neutral" }: { label: string; va
           {value.toLocaleString("en-US")}
         </p>
       )}
-    </div>
+    </>
+  );
+  return to ? (
+    <Link to={to} className={`block ${CARD_CLASSES} hover:border-brand/40 hover:bg-surface-muted`}>
+      {content}
+    </Link>
+  ) : (
+    <div className={CARD_CLASSES}>{content}</div>
   );
 }

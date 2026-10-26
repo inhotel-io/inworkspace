@@ -18,6 +18,8 @@ export interface StoredEvent {
 
 export interface EventQuery {
   typePrefix?: string;
+  /** Only these exact types. */
+  types?: readonly string[];
   severity?: Severity;
   address?: string;
   since?: Date;
@@ -164,6 +166,7 @@ export async function queryEvents(pool: Pool, query: EventQuery): Promise<Stored
     conditions.push(template.replace("?", `$${values.length}`));
   };
   if (query.typePrefix) where("type like ?", `${escapeLike(query.typePrefix)}%`);
+  if (query.types) where("type = any(?::text[])", [...query.types]);
   if (query.severity) where("severity = ?", query.severity);
   if (query.address) where("addresses @> array[?]::text[]", query.address.toLowerCase());
   if (query.since) where("event_at >= ?", query.since);

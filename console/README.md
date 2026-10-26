@@ -7,6 +7,8 @@ operators sign in with their mail-server account. The console shows:
 
 - **Overview**: 24-hour counts, every mailbox on the server with its activity, and the latest
   errors. It reloads every minute and marks mailboxes with activity since you opened it.
+  *Access problems* counts failed sign-ins and new bans, and opens them; connections from
+  addresses that are already banned are left out.
 - **Mailboxes**: all of a mailbox's mail, newest first, read live from every folder. Each
   conversation is marked *awaiting reply*, *answered*, *junk*, *automated*, *draft* or *in
   Trash*. An open mailbox checks for new mail every 30 seconds and marks what arrived.

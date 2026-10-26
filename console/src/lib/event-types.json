@@ -102,7 +102,6 @@
     "auth.too-many-attempts",
     "security.authentication-ban",
     "security.abuse-ban",
-    "security.ip-blocked",
     "security.scan-ban",
     "security.loiter-ban",
     "security.unauthorized"

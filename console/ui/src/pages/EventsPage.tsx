@@ -1,6 +1,7 @@
 import { Link, useSearchParams } from "react-router";
 import type { EventsResponse, MailboxesResponse } from "@/lib/apiTypes";
 import { EVENT_TYPE_PREFIXES, EVENT_WINDOWS, eventFiltersQuery, parseEventFilters } from "@/lib/eventFilters";
+import type { EventGroup } from "@/lib/eventTypes";
 import { parseEventId } from "@/lib/params";
 import { EventRow } from "../components/EventRow";
 import { ErrorPanel } from "../components/ErrorPanel";
@@ -13,6 +14,9 @@ import { useDocumentTitle } from "../useDocumentTitle";
 /** The API computes the window's start itself; this only parses the filters. */
 const UNUSED_NOW = new Date(0);
 const FILTER_NAMES = ["type", "severity", "mailbox", "window"] as const;
+/** The Type list also offers groups of types; a chosen group travels as its own parameter. */
+const GROUP_CHOICE = "group:";
+const GROUP_LABELS: Record<EventGroup, string> = { access: "Access problems: failed sign-ins and bans" };
 
 export function EventsPage() {
   useDocumentTitle("Events");
@@ -30,6 +34,11 @@ export function EventsPage() {
     for (const name of FILTER_NAMES) {
       const value = String(data.get(name) ?? "").trim();
       if (value) chosen.set(name, value);
+    }
+    const type = chosen.get("type");
+    if (type?.startsWith(GROUP_CHOICE)) {
+      chosen.delete("type");
+      chosen.set("group", type.slice(GROUP_CHOICE.length));
     }
     // The canonical query the API and the links use, with defaults left out.
     setSearch(new URLSearchParams(eventFiltersQuery(parseEventFilters(chosen, UNUSED_NOW))));
@@ -52,8 +61,17 @@ export function EventsPage() {
       >
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-text-muted">Type</span>
-          <select name="type" defaultValue={filters.typePrefix ?? ""} className="rounded-md border border-border bg-surface px-2 py-1.5">
+          <select
+            name="type"
+            defaultValue={filters.group ? `${GROUP_CHOICE}${filters.group}` : (filters.typePrefix ?? "")}
+            className="rounded-md border border-border bg-surface px-2 py-1.5"
+          >
             <option value="">All types</option>
+            {Object.entries(GROUP_LABELS).map(([group, label]) => (
+              <option key={group} value={`${GROUP_CHOICE}${group}`}>
+                {label}
+              </option>
+            ))}
             {EVENT_TYPE_PREFIXES.map((prefix) => (
               <option key={prefix} value={prefix}>
                 {prefix}*

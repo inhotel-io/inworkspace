@@ -37,6 +37,15 @@ describe("format", () => {
     expect(describeEvent({ sender: null, recipients: [], data: { remoteIp: "192.0.2.1", code: 550 } })).toBe("code 550 · from 192.0.2.1");
   });
 
+  it("names the login a failed sign-in tried, and the page a scan probed", () => {
+    expect(
+      describeEvent({ sender: null, recipients: [], data: { accountName: "shaggy@example.test", reason: "Account not found", remoteIp: "192.0.2.9" } }),
+    ).toBe("as shaggy@example.test · Account not found · from 192.0.2.9");
+    expect(describeEvent({ sender: null, recipients: [], data: { path: "/wp-login.php", remoteIp: "192.0.2.10" } })).toBe(
+      "asked for /wp-login.php · from 192.0.2.10",
+    );
+  });
+
   it("writes one JSON audit line", () => {
     expect(JSON.parse(auditLine({ operator: "alex@example.com", mailbox: "a@example.test", threadId: "b" }, new Date("2026-10-25T12:00:00Z")))).toEqual({
       severity: "NOTICE",

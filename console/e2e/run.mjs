@@ -337,10 +337,14 @@ try {
     throw new Error(`the reply or the other messages failed: ${JSON.stringify([created, submitted])}`);
   }
 
+  // A wrong password, so the event store has an access problem to show.
+  const wrong = await fetch(`${SERVER}/jmap/session`, { headers: { Authorization: basic(`nobody@${DOMAIN}`, "not-the-password") } });
+  if (wrong.status !== 401) throw new Error(`a wrong password answered ${wrong.status}`);
+
   step("Waiting for the server's events in Postgres");
   const db = new pg.Client({ connectionString: DATABASE_URL });
   await db.connect();
-  const expected = ["queue.authenticated-message-queued", "delivery.dsn-perm-fail", "smtp.mailbox-does-not-exist"];
+  const expected = ["queue.authenticated-message-queued", "delivery.dsn-perm-fail", "smtp.mailbox-does-not-exist", "auth.failed"];
   const types = await waitFor("the expected events", async () => {
     const { rows } = await db.query("select distinct type from events");
     const seen = rows.map((row) => row.type);
@@ -393,6 +397,13 @@ try {
   expect(events.some((event) => event.type === "delivery.dsn-perm-fail" && JSON.stringify(event.data).includes("null MX")), "the events include the bounce");
   const live = (await apiJson("events?after=0", token)).body;
   expect(live.events.length > 0 && live.pageSize === 200, "live mode returns events after an id");
+  const access = (await apiJson("events?group=access", token)).body.events;
+  expect(
+    access.some((event) => event.type === "auth.failed" && event.data.accountName === `nobody@${DOMAIN}`) &&
+      access.every((event) => event.type.startsWith("auth.") || (event.type.startsWith("security.") && event.type !== "security.ip-blocked")),
+    "the access problems are the failed sign-ins and bans, with the login that was tried",
+  );
+  expect(overview.totals.accessProblems === access.length, "and the overview counts the same events");
   const own = await api(`mailboxes/${encodeURIComponent(`console@${DOMAIN}`)}/threads`, { token });
   expect(own.status === 404, "the console's own account is not opened");
   const ghost = await api(`mailboxes/${encodeURIComponent(`ghost@${DOMAIN}`)}/threads`, { token });

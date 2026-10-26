@@ -14,6 +14,12 @@ describe("event types", () => {
     }
   });
 
+  it("counts failed sign-ins and new bans as access problems, not connections already blocked", () => {
+    expect(ACCESS_EVENT_TYPES).toEqual(expect.arrayContaining(["auth.failed", "auth.too-many-attempts", "security.unauthorized", "security.scan-ban"]));
+    expect(ACCESS_EVENT_TYPES).not.toContain("security.ip-blocked");
+    expect(SUBSCRIBED_EVENT_TYPES).toContain("security.ip-blocked");
+  });
+
   it("never gives a type two severities", () => {
     expect(eventTypes.error.filter((type) => eventTypes.warning.includes(type))).toEqual([]);
   });
