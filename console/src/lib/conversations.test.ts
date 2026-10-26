@@ -42,7 +42,22 @@ describe("summarizeThreads", () => {
       roles,
     );
     expect(deleted?.status).toBe("deleted");
-    expect(draft?.status).toBe("draft");
+    expect([draft?.status, draft?.lastDraft]).toEqual(["draft", true]);
+  });
+
+  it("keeps a discarded draft in Trash a draft, never a sent message", () => {
+    const [discarded] = summarizeThreads(
+      [{ ...fixture.latest[0]!, mailboxIds: { b: true }, keywords: { $draft: true } }],
+      fixture.threads,
+      AGENT,
+      roles,
+    );
+    expect([discarded?.status, discarded?.lastDraft, discarded?.lastDirection]).toEqual(["deleted", true, "outbound"]);
+  });
+
+  it("files mail in Junk that claims the mailbox's own address as junk it received", () => {
+    const [spoofed] = summarizeThreads([{ ...fixture.latest[0]!, mailboxIds: { c: true } }], fixture.threads, AGENT, roles);
+    expect([spoofed?.status, spoofed?.lastDirection, spoofed?.lastDraft]).toEqual(["junk", "inbound", false]);
   });
 
   it("names threads without a subject", () => {
@@ -52,10 +67,16 @@ describe("summarizeThreads", () => {
 });
 
 describe("directionOf", () => {
-  it("treats Sent or the mailbox's own address as outbound", () => {
+  it("treats Sent, drafts and the mailbox's own address elsewhere as outbound", () => {
     expect(directionOf(fixture.latest[0]!, AGENT, roles)).toBe("outbound");
-    expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { a: true } }, AGENT, roles)).toBe("outbound");
+    expect(directionOf({ ...fixture.latest[3]!, mailboxIds: { d: true } }, AGENT, roles)).toBe("outbound");
+    expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { archive: true } }, AGENT, roles)).toBe("outbound");
     expect(directionOf(fixture.latest[3]!, AGENT, roles)).toBe("inbound");
+  });
+
+  it("treats Inbox and Junk as received, whoever the sender claims to be", () => {
+    expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { a: true } }, AGENT, roles)).toBe("inbound");
+    expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { c: true } }, AGENT, roles)).toBe("inbound");
   });
 });
 

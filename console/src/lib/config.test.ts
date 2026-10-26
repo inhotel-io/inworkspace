@@ -213,6 +213,14 @@ describe("parseConfig", () => {
     expect(parseConfig({ ...API, AGENT_DOMAINS: "ignored.example.com" }).mailboxDomains).toEqual(["example.com", "other.example.com"]);
   });
 
+  it("reads the old names as a pair: either new name replaces both", () => {
+    expect(parseConfig({ ...API, AGENT_LOCALPART_PATTERN: "a[0-9]+" }).mailboxLocalpartPattern).toBeNull();
+    const { MAILBOX_DOMAINS: _unset, ...rest } = API;
+    const config = parseConfig({ ...rest, MAILBOX_LOCALPART_PATTERN: "[a-z]+", AGENT_DOMAINS: "agents.example.com" });
+    expect(config.mailboxDomains).toEqual([]);
+    expect(config.mailboxLocalpartPattern?.test("alex")).toBe(true);
+  });
+
   it("rejects an invalid local-part pattern and time zone", () => {
     expect(problemsOf({ ...API, MAILBOX_LOCALPART_PATTERN: "(", DISPLAY_TIME_ZONE: "Mars/Olympus" })).toEqual(
       expect.arrayContaining([

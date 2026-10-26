@@ -120,7 +120,7 @@ Each unit has one purpose and is tested on its own.
 | `eventStore` | Migrations, idempotent batch insert, filtered queries, overview counts, per-mailbox activity, retention prune. | Postgres |
 | `ingest` | The ingest request handler: size limit, signature, parse, store, prune. | `signature`, `normalize`, `eventStore` |
 | `jmap` | Minimal JMAP client: session discovery and method calls, authenticated either as the console principal or as a mailbox through master-user login. Rejects any method not on its read-only allow-list. | — |
-| `directory` | The listed mailboxes, with display names, and the listed domains. Cached for five minutes. | `jmap` |
+| `directory` | The listed mailboxes, with display names, and the listed domains. Reads the registry in gets no larger than the server's `maxObjectsInGet`. Cached for five minutes, and requests that arrive during a read share it. | `jmap` |
 | `conversations` | Build thread summaries and thread views from JMAP results: direction of each message, junk, automated and awaiting-reply flags. | — |
 | `mailbox` | Read one listed mailbox through `jmap` and hand the results to `conversations`. | `jmap`, `conversations`, `sanitize` |
 | `sanitize` | Turn an HTML email body into safe markup and plain text. | — |
@@ -274,19 +274,22 @@ keywords, so no message becomes seen.
 - **Thread list**: `Email/query` across every folder, Trash and Drafts included, newest
   first, collapsed by thread, 50 per page; then `Email/get` and `Thread/get`. Each row
   shows the subject, the counterpart, the message count, the last activity and a status,
-  from the newest message: *in Trash* when it is in Trash; *draft* when it is in Drafts;
-  otherwise *junk* when it is inbound and in Junk or marked `$junk`; *automated* when it is
+  from the newest message: *in Trash* when it is in Trash; *draft* when it is a draft (in
+  Drafts, or marked `$draft` wherever it was moved); otherwise *junk* when it is inbound and
+  in Junk or marked `$junk`; *automated* when it is
   inbound and machine-generated (an `Auto-Submitted` header other than `no`, or a
   `mailer-daemon` or `postmaster` sender); *awaiting reply* when it is inbound and neither
   junk nor automated; *answered* when it is outbound.
 - **New mail**: while a mailbox is shown, the web app reloads its page every 30 seconds.
   On the first page, threads with activity after the newest it showed when it opened are
   marked new. The reloads are logged like any view, marked as automatic.
-- **Thread view**: every message of the thread in time order, marked inbound or outbound
-  (outbound when it is in Sent or sent from the mailbox's address), with sender, recipients, date, text
-  body, and the sanitized HTML body on request. A message in Drafts is labelled as a draft
-  that was never sent, and a message in Trash is marked as such. Attachments are listed by
-  name and size; they are not downloadable in this version.
+- **Direction**: a message is outbound when it is in Sent or is a draft, and inbound when
+  it is in Inbox or Junk, even if it claims the mailbox's own address as its sender. In any
+  other folder, a message from the mailbox's own address is outbound.
+- **Thread view**: every message of the thread in time order, marked inbound or outbound,
+  with sender, recipients, date, text body, and the sanitized HTML body on request. A draft
+  is labelled as never sent, and a message in Trash is marked as such. Attachments are listed
+  by name and size; they are not downloadable in this version.
 
 HTML bodies are sanitized by the API. The web app renders them in an `iframe` with an empty
 `sandbox` attribute (no scripts, no same-origin), whose document carries a content security
@@ -310,7 +313,8 @@ Below the counts: one row per listed mailbox with its received, junk, sent and e
 and its last activity, most recently active first, linking to its conversations; and the 20
 most recent `error` events. The page reloads every minute while it is shown, and marks
 mailboxes with activity since it opened. When the mailbox list cannot be read, the counts
-that depend on it show "—" instead of zero, next to an error panel.
+that depend on it show "—" instead of zero, next to an error panel. *Refused at SMTP* does
+too, unless `MAILBOX_DOMAINS` names the domains to match refusals against.
 
 ## Events view
 
@@ -449,7 +453,8 @@ server's own administration.
 - `AUTH_MODE=none` is for local development only. It is refused when
   `NODE_ENV=production` unless `ALLOW_INSECURE_AUTH_NONE=1` is also set.
 - Every mailbox and thread view writes an audit line: the operator's login, the mailbox,
-  the thread id and the time. Reloads the web app makes by itself are marked `automatic`.
+  the thread id and the time. Reloads the web app makes by itself are marked `automatic`. The
+  web app says which those are, so the mark is a guide through the log, not proof.
 - The console never stores message bodies. Event rows hold addresses, IPs and ids, and
   expire with retention.
 - API responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and
@@ -466,8 +471,8 @@ server's own administration.
 | `JMAP_URL` | api | Origin of the inWorkspace server, such as `https://mail.example.com`. The web app runs on it. |
 | `JMAP_PRINCIPAL` | api | Login of the console principal. |
 | `JMAP_PRINCIPAL_SECRET` | api | Its password. |
-| `MAILBOX_DOMAINS` | api | Optional comma-separated domains whose mailboxes the console lists; default: every domain on the server. Before 0.4, `AGENT_DOMAINS`, still read when this is unset. |
-| `MAILBOX_LOCALPART_PATTERN` | api | Optional regular expression the whole local part must match. Before 0.4, `AGENT_LOCALPART_PATTERN`. |
+| `MAILBOX_DOMAINS` | api | Optional comma-separated domains whose mailboxes the console lists; default: every domain on the server. Before 0.4, `AGENT_DOMAINS`. |
+| `MAILBOX_LOCALPART_PATTERN` | api | Optional regular expression the whole local part must match. Before 0.4, `AGENT_LOCALPART_PATTERN`. The old names are read only while neither new name is set. |
 | `PUBLIC_URL` | api | Origin at which browsers reach the api role, such as `https://console-api.example.com`. |
 | `AUTH_MODE` | api | `server` (default) or `none`. |
 | `OPERATOR_PERMISSION` | api | The server permission an operator needs; default `impersonate`. |
@@ -539,15 +544,15 @@ does the same idempotently — :
   2. Register the OAuth client and the web application. Confirm that the server ignores the
      record until Update apps, then serves the shell at `/console`. Confirm that the entry
      module and an asset load from the API with CORS for the server's origin.
-  3. Send messages over SMTP. Over JMAP, reply from a mailbox, and create a draft and a
-     message in Trash.
+  3. Send messages over SMTP. Over JMAP, reply from a mailbox, and create a draft, a message
+     in Trash, a draft thrown in Trash, and spam in Junk that claims the mailbox's own address.
   4. Confirm that the shell is also served on the callback path, and that registering the same
      shell again changes nothing.
   5. Sign in as the recovery administrator through the server's real `/api/auth` and
      `/auth/token` endpoints.
   6. Confirm that the API lists every mailbox of both domains but not its own account,
-     returns the conversation with an inbound and an outbound message, marks the draft and
-     the message in Trash, and returns the events. Confirm that each mailbox read is logged
+     returns the conversation with an inbound and an outbound message, marks each of the
+     other messages for what it is, and returns the events. Confirm that each mailbox read is logged
      once, with an automatic reload marked as such.
   7. Confirm that the API refuses a missing or invalid token with 401 and the plain user with
      403, and answers preflights only for the server's origin.

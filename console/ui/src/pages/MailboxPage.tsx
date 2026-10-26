@@ -111,7 +111,7 @@ function Threads({
                       {thread.subject}
                     </Link>
                     <p className="mt-0.5 line-clamp-1 text-xs text-text-muted">
-                      {thread.lastDirection === "outbound" && thread.status !== "draft" ? "Sent: " : ""}
+                      {thread.lastDirection === "outbound" && !thread.lastDraft ? "Sent: " : ""}
                       {thread.preview}
                     </p>
                   </td>

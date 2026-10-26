@@ -33,7 +33,8 @@ export const GET = apiRoute(async (): Promise<OverviewResponse> => {
     totals: {
       received: listed(counts.received),
       junk: listed(counts.junk),
-      refused: counts.refused,
+      // Refusals are matched by domain; with no domain known they cannot be told apart.
+      refused: domains.length > 0 ? counts.refused : null,
       sent: listed(counts.sent),
       delivered: listed(counts.delivered),
       deliveryProblems: listed(counts.deliveryProblems),

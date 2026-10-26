@@ -11,6 +11,7 @@ const DIRECTORY_CACHE_MS = 5 * 60 * 1000;
 
 let client: JmapClient | undefined;
 let directoryCache: { loadedAt: number; directory: MailboxDirectory } | undefined;
+let directoryLoading: Promise<MailboxDirectory> | undefined;
 let verifier: TokenVerifier | undefined;
 let shell: Promise<UiShell> | undefined;
 let app: Promise<UiApp> | undefined;
@@ -30,13 +31,18 @@ function directorySettings(): DirectorySettings {
   return { mailboxDomains: config.mailboxDomains, mailboxLocalpartPattern: config.mailboxLocalpartPattern, principal: config.jmapPrincipal };
 }
 
-/** The mailbox directory, cached for five minutes. */
+/** The mailbox directory, cached for five minutes. Requests that come in while it is read share that read. */
 export async function getMailboxes(): Promise<MailboxDirectory> {
-  const now = Date.now();
-  if (directoryCache && now - directoryCache.loadedAt < DIRECTORY_CACHE_MS) return directoryCache.directory;
-  const directory = await fetchMailboxes(jmapClient(), principalCredentials(), directorySettings());
-  directoryCache = { loadedAt: now, directory };
-  return directory;
+  if (directoryCache && Date.now() - directoryCache.loadedAt < DIRECTORY_CACHE_MS) return directoryCache.directory;
+  directoryLoading ??= fetchMailboxes(jmapClient(), principalCredentials(), directorySettings())
+    .then((directory) => {
+      directoryCache = { loadedAt: Date.now(), directory };
+      return directory;
+    })
+    .finally(() => {
+      directoryLoading = undefined;
+    });
+  return directoryLoading;
 }
 
 /** Only listed mailboxes can be opened, so a URL cannot point the console at any other account. */

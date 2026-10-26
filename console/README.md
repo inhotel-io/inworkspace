@@ -233,7 +233,7 @@ Vite proxies sign-in to the server and API calls to the console.
 | --- | --- |
 | `npm test` | Unit tests for the service: configuration, signature, normalization, JMAP client, conversations, sanitizing, token verification, CORS, the API wrapper and the bundle. Also the web app's sign-in and its API client. |
 | `npm run test:integration` | The event store against a real Postgres; needs `TEST_DATABASE_URL`. |
-| `npm run e2e` | A real inWorkspace server and Postgres in Docker, with mailboxes in two domains. It sends mail over SMTP, and a reply, a draft and a message in Trash over JMAP. It checks the web app at `/console`, and signs in through the server's OAuth endpoints. Then it calls the API with valid, invalid and unauthorized tokens, and checks the audit lines. |
+| `npm run e2e` | A real inWorkspace server and Postgres in Docker, with mailboxes in two domains. It sends mail over SMTP, and over JMAP a reply plus drafts and messages in Trash and Junk. It checks the web app at `/console`, and signs in through the server's OAuth endpoints. Then it calls the API with valid, invalid and unauthorized tokens, and checks the audit lines. |
 | `npm run e2e:insights` | The web admin's Dashboard, Live Tracing and History, against a real server in Docker (v0.16.13 by default, `E2E_STALWART_TAG` for another). It sets up the queue reader, the tracing webhook and the metrics push, and installs the patched web admin at `/admin`. Then it reads metrics, traces and the live feed as an administrator, and checks that an account without the permissions is refused. Builds the web admin first unless `WEBADMIN_ZIP` names one. |
 
 ## Deployment
@@ -273,9 +273,9 @@ its page template.
 
 Version 0.4 lists every mailbox, where 0.3 listed only AI agents' mailboxes.
 - `AGENT_DOMAINS` and `AGENT_LOCALPART_PATTERN` are now `MAILBOX_DOMAINS` and
-  `MAILBOX_LOCALPART_PATTERN`, and both are optional. The old names are still read while the
-  new ones are unset, so a deployment keeps listing the same mailboxes. Remove them to list
-  every mailbox on the server.
+  `MAILBOX_LOCALPART_PATTERN`, and both are optional. The old names are read only while neither
+  new name is set, so a deployment keeps listing the same mailboxes; setting either new name
+  replaces both old ones. Remove the old names to list every mailbox on the server.
 - The API's `agents` paths are now `mailboxes`. Links to the web app's old `#/agents/…` pages
   still work.
 - `console.view` log lines name the `mailbox`, where they named the `agent`.
@@ -310,7 +310,8 @@ An account may use the console when it has the `impersonate` permission (`OPERAT
 Logs are JSON lines.
 - `console.view` records every mailbox and thread view, with the operator's login, the
   mailbox and the thread. Reloads the web app makes by itself, to show new mail, carry
-  `"automatic": true`.
+  `"automatic": true`. The web app says which reads those are and the API takes its word, so
+  read the field as a guide through the log, not as proof.
 - These report problems: `console.ingest.*`, `console.auth.unavailable`, `console.jmap.failed`,
   `console.api.failed` and `console.startup-failed`.
 

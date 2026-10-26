@@ -17,7 +17,7 @@ export interface MeResponse {
 export interface OverviewTotals {
   received: number | null;
   junk: number | null;
-  refused: number;
+  refused: number | null;
   sent: number | null;
   delivered: number | null;
   deliveryProblems: number | null;

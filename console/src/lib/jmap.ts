@@ -25,6 +25,8 @@ export interface JmapSession {
   username: string;
   apiUrl: string;
   primaryAccounts: Record<string, string>;
+  /** The core capability carries the server's limits, such as `maxObjectsInGet`. */
+  capabilities?: Record<string, Record<string, unknown>>;
 }
 
 export class JmapError extends Error {

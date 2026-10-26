@@ -153,10 +153,11 @@ export function parseConfig(env: Env): ConsoleConfig {
     jmapUrl = origin("JMAP_URL", "https://mail.example.com");
     jmapPrincipal = need("JMAP_PRINCIPAL").toLowerCase();
     jmapPrincipalSecret = need("JMAP_PRINCIPAL_SECRET");
-    // AGENT_DOMAINS and AGENT_LOCALPART_PATTERN are the names before 0.4, still read when the new ones are unset.
-    const domainsName = text(env, "MAILBOX_DOMAINS") || !text(env, "AGENT_DOMAINS") ? "MAILBOX_DOMAINS" : "AGENT_DOMAINS";
-    mailboxDomains = list(env, domainsName);
-    const patternName = text(env, "MAILBOX_LOCALPART_PATTERN") || !text(env, "AGENT_LOCALPART_PATTERN") ? "MAILBOX_LOCALPART_PATTERN" : "AGENT_LOCALPART_PATTERN";
+    // AGENT_DOMAINS and AGENT_LOCALPART_PATTERN are the names before 0.4. They are read only while
+    // neither new name is set: an upgrade keeps its list, and setting either new name replaces both.
+    const legacy = !text(env, "MAILBOX_DOMAINS") && !text(env, "MAILBOX_LOCALPART_PATTERN");
+    mailboxDomains = list(env, legacy ? "AGENT_DOMAINS" : "MAILBOX_DOMAINS");
+    const patternName = legacy ? "AGENT_LOCALPART_PATTERN" : "MAILBOX_LOCALPART_PATTERN";
     const pattern = text(env, patternName);
     if (pattern) {
       try {

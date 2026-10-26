@@ -37,7 +37,8 @@ export function OverviewPage() {
       ) : overview.status === "error" ? (
         <ErrorPanel title="The overview could not be loaded" detail={overview.error.message} />
       ) : (
-        <OverviewContent data={overview.data} loadedAt={overview.loadedAt} />
+        // Keyed by whether the mailbox list could be read: what is new counts from the first list.
+        <OverviewContent key={overview.data.mailboxes === null ? "without-list" : "with-list"} data={overview.data} loadedAt={overview.loadedAt} />
       )}
     </main>
   );
@@ -61,7 +62,8 @@ function OverviewContent({ data, loadedAt }: { data: OverviewResponse; loadedAt:
     const before = seen.get(mailbox.address);
     return before === undefined || before === null || Date.parse(mailbox.lastActivity) > Date.parse(before);
   };
-  const query = search.trim().toLowerCase();
+  const searchable = mailboxes !== null && mailboxes.length > SEARCH_FROM;
+  const query = searchable ? search.trim().toLowerCase() : "";
   const shown = (mailboxes ?? [])
     .filter((mailbox) => !query || mailbox.address.includes(query) || (mailbox.name?.toLowerCase().includes(query) ?? false))
     .sort(byActivity);
@@ -87,7 +89,7 @@ function OverviewContent({ data, loadedAt }: { data: OverviewResponse; loadedAt:
           <h2 id="mailboxes-heading" className="text-sm font-semibold">
             Mailboxes <span className="font-normal text-text-muted">({mailboxes ? mailboxes.length : "—"})</span>
           </h2>
-          {mailboxes && mailboxes.length > SEARCH_FROM ? (
+          {searchable ? (
             <input
               type="search"
               value={search}

@@ -266,7 +266,7 @@ try {
     ]);
     const email = emails.list.find((candidate) => candidate.messageId?.includes("e2e-1@example.com"));
     const folder = (role) => mailboxes.list.find((mailbox) => mailbox.role === role)?.id;
-    return email && { ...email, sent: folder("sent"), drafts: folder("drafts"), trash: folder("trash"), identity: identities.list[0]?.id };
+    return email && { ...email, sent: folder("sent"), drafts: folder("drafts"), trash: folder("trash"), junk: folder("junk"), identity: identities.list[0]?.id };
   });
   const textBody = (value) => ({ bodyValues: { t: { value } }, textBody: [{ partId: "t", type: "text/plain" }] });
   const [[, created], [, submitted]] = await jmapAs(MAILBOX, frontDeskSecret, mailUsing, [
@@ -302,6 +302,24 @@ try {
             subject: "This week's deals",
             ...textBody("Unsubscribe any time."),
           },
+          // A draft thrown away: in Trash, still marked as a draft. It was never sent.
+          o: {
+            mailboxIds: { [inboundEmail.trash]: true },
+            keywords: { $draft: true, $seen: true },
+            from: [{ name: "Front desk", email: MAILBOX }],
+            to: [{ name: "Jane Guest", email: GUEST }],
+            subject: "Old draft for Jane",
+            ...textBody("Never mind."),
+          },
+          // Spam that claims to come from the mailbox itself, filed in Junk: received, not sent.
+          j: {
+            mailboxIds: { [inboundEmail.junk]: true },
+            keywords: { $junk: true },
+            from: [{ email: MAILBOX }],
+            to: [{ email: MAILBOX }],
+            subject: "Your mailbox is full",
+            ...textBody("Click here."),
+          },
         },
       },
       "e",
@@ -315,8 +333,8 @@ try {
       "x",
     ],
   ]);
-  if (!created.created?.r || !created.created?.d || !created.created?.t || !submitted.created?.s) {
-    throw new Error(`the reply, the draft or the deleted message failed: ${JSON.stringify([created, submitted])}`);
+  if (["r", "d", "t", "o", "j"].some((key) => !created.created?.[key]) || !submitted.created?.s) {
+    throw new Error(`the reply or the other messages failed: ${JSON.stringify([created, submitted])}`);
   }
 
   step("Waiting for the server's events in Postgres");
@@ -356,6 +374,10 @@ try {
   expect(thread?.status === "answered", "the conversation is listed as answered");
   expect(threads.find((candidate) => candidate.subject === "Spa offer for Jane")?.status === "draft", "a draft is listed, marked as a draft");
   expect(threads.find((candidate) => candidate.subject === "This week's deals")?.status === "deleted", "mail in Trash is listed, marked as deleted");
+  const discarded = threads.find((candidate) => candidate.subject === "Old draft for Jane");
+  expect(discarded?.status === "deleted" && discarded.lastDraft, "a draft thrown in Trash stays a draft, never shown as sent");
+  const spoofed = threads.find((candidate) => candidate.subject === "Your mailbox is full");
+  expect(spoofed?.status === "junk" && spoofed.lastDirection === "inbound", "spam in Junk that claims the mailbox's own address counts as received junk");
   const messages = (await apiJson(`${mailboxPath}/${thread.threadId}`, token)).body.messages;
   expect(
     messages.some((message) => message.direction === "inbound" && message.text.includes("Hi, can I check in at 11pm on Friday?")) &&
