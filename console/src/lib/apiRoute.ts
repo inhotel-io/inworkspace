@@ -3,7 +3,7 @@ import { AuthError, RateLimitError, requirePermissions, VerifierUnavailableError
 import { corsHeaders, preflight } from "./cors";
 import { JmapError } from "./jmap";
 
-/** A failure a handler reports on purpose: bad parameters, or an unknown agent or thread. */
+/** A failure a handler reports on purpose: bad parameters, or an unknown mailbox or thread. */
 export class ApiError extends Error {
   constructor(
     readonly status: 400 | 404,

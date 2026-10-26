@@ -1,20 +1,18 @@
 # inWorkspace Console
 
-A read-only web console for the people who oversee AI agents working through inWorkspace
-mailboxes.
-- People email an agent's address.
-- An agent runtime reads the mailbox over JMAP.
-- The agent's reply is sent from the same mailbox.
+A read-only web console for the people who oversee the mailboxes on an inWorkspace server.
 
 The inWorkspace server serves the console itself, at `/console` next to its web admin, and
 operators sign in with their mail-server account. The console shows:
 
-- **Conversations**: each agent's threads, read live from its mailbox. Each thread is marked
-  *awaiting reply*, *answered*, *junk* or *automated*.
-- **Events**: what the mail server did with agent mail:
+- **Overview**: 24-hour counts, every mailbox on the server with its activity, and the latest
+  errors. It reloads every minute and marks mailboxes with activity since you opened it.
+- **Mailboxes**: all of a mailbox's mail, newest first, read live from every folder. Each
+  conversation is marked *awaiting reply*, *answered*, *junk*, *automated*, *draft* or *in
+  Trash*. An open mailbox checks for new mail every 30 seconds and marks what arrived.
+- **Events**: what the mail server did with mail:
   - messages accepted, filed as junk, refused, queued, delivered or bounced;
   - authentication and abuse problems.
-- **Overview**: 24-hour counts, per-agent activity and the latest errors.
 
 It also gives the server's own web admin the screens the community edition locks: the
 **Dashboard**, **Live Tracing** and the delivery **History**. The console collects their data, and
@@ -53,7 +51,7 @@ The console has two parts.
   and code under `/ui/`.
   - Browsers call it from the server's origin, so it is publicly reachable. Every API request
     needs an operator's access token.
-  - It reads mailboxes over JMAP, using a master-user login as each agent.
+  - It reads mailboxes over JMAP, using a master-user login as each mailbox's account.
 - **ingest** accepts what the server sends, and stores it in Postgres:
   - signed event batches at `POST /api/ingest/events`;
   - signed tracing batches at `POST /api/ingest/traces`;
@@ -83,8 +81,8 @@ metrics for `METRIC_RETENTION_DAYS`.
 | `JMAP_URL` | api, and ingest with a queue reader | Origin of the inWorkspace server, such as `https://mail.example.com`. The web app runs on it. |
 | `JMAP_PRINCIPAL` | api | Login of the console principal. |
 | `JMAP_PRINCIPAL_SECRET` | api | Its password. |
-| `AGENT_DOMAINS` | api | Comma-separated domains whose accounts are agent mailboxes. |
-| `AGENT_LOCALPART_PATTERN` | api | Optional regular expression the whole local part must match. |
+| `MAILBOX_DOMAINS` | api | Optional comma-separated domains whose mailboxes the console lists. Default: every domain on the server. |
+| `MAILBOX_LOCALPART_PATTERN` | api | Optional regular expression the whole local part of a listed mailbox must match. |
 | `PUBLIC_URL` | api | Origin at which browsers reach the api role, such as `https://console-api.example.com`. |
 | `AUTH_MODE` | api | `server` (default) or `none`; see [Access](#access). |
 | `OPERATOR_PERMISSION` | api | The server permission an operator needs; default `impersonate`. |
@@ -118,7 +116,7 @@ time zone) or its page template, which release notes mention.
 ```bash
 SERVER_URL=https://mail.example.com \
 SERVER_ADMIN_USER=admin SERVER_ADMIN_SECRET=… \
-CONSOLE_PRINCIPAL=console@agents.example.com CONSOLE_PRINCIPAL_SECRET=… \
+CONSOLE_PRINCIPAL=console@example.com CONSOLE_PRINCIPAL_SECRET=… \
 WEBHOOK_URL=https://console-ingest.example.com/api/ingest/events WEBHOOK_SIGNING_KEY=… \
 CONSOLE_URL=https://console-api.example.com \
 node scripts/server-setup.mjs
@@ -131,7 +129,7 @@ node scripts/server-setup.mjs
   itself:
   - It only sends `Mailbox/get`, `Email/query`, `Email/get`, `Thread/get`, and the registry's
     `get` and `query` calls.
-  - It only opens mailboxes from its agent directory.
+  - It only opens the mailboxes it lists: user accounts in the listed domains, never its own.
 
 **The webhook** subscribes to the 39 event types in
 [`src/lib/event-types.json`](src/lib/event-types.json), at level `info`, signed with the key.
@@ -235,7 +233,7 @@ Vite proxies sign-in to the server and API calls to the console.
 | --- | --- |
 | `npm test` | Unit tests for the service: configuration, signature, normalization, JMAP client, conversations, sanitizing, token verification, CORS, the API wrapper and the bundle. Also the web app's sign-in and its API client. |
 | `npm run test:integration` | The event store against a real Postgres; needs `TEST_DATABASE_URL`. |
-| `npm run e2e` | A real inWorkspace server and Postgres in Docker. It sends mail over SMTP and an agent reply over JMAP, checks the web app at `/console`, and signs in through the server's OAuth endpoints. Then it calls the API with valid, invalid and unauthorized tokens. |
+| `npm run e2e` | A real inWorkspace server and Postgres in Docker, with mailboxes in two domains. It sends mail over SMTP, and over JMAP a reply plus drafts and messages in Trash and Junk. It checks the web app at `/console`, and signs in through the server's OAuth endpoints. Then it calls the API with valid, invalid and unauthorized tokens, and checks the audit lines. |
 | `npm run e2e:insights` | The web admin's Dashboard, Live Tracing and History, against a real server in Docker (v0.16.13 by default, `E2E_STALWART_TAG` for another). It sets up the queue reader, the tracing webhook and the metrics push, and installs the patched web admin at `/admin`. Then it reads metrics, traces and the live feed as an administrator, and checks that an account without the permissions is refused. Builds the web admin first unless `WEBADMIN_ZIP` names one. |
 
 ## Deployment
@@ -271,6 +269,18 @@ A new console version needs only the deploy: the next page load picks up the new
 [`scripts/server-setup.mjs`](#server-setup) again only when the shell changes: its settings or
 its page template.
 
+## Upgrading from 0.3
+
+Version 0.4 lists every mailbox, where 0.3 listed only AI agents' mailboxes.
+- `AGENT_DOMAINS` and `AGENT_LOCALPART_PATTERN` are now `MAILBOX_DOMAINS` and
+  `MAILBOX_LOCALPART_PATTERN`, and both are optional. The old names are read only while neither
+  new name is set, so a deployment keeps listing the same mailboxes; setting either new name
+  replaces both old ones. Remove the old names to list every mailbox on the server.
+- The API's `agents` paths are now `mailboxes`. Links to the web app's old `#/agents/…` pages
+  still work.
+- `console.view` log lines name the `mailbox`, where they named the `agent`.
+- A mailbox's list now includes drafts and mail in Trash, marked.
+
 ## Upgrading from 0.1
 
 Version 0.1 had a server-rendered console behind Google identity, with roles `web` and
@@ -298,18 +308,21 @@ An account may use the console when it has the `impersonate` permission (`OPERAT
 - `ALLOWED_ACCOUNTS` narrows access further, to named logins.
 
 Logs are JSON lines.
-- `console.view` records every conversation and thread view, with the operator's login, the
-  agent and the thread.
+- `console.view` records every mailbox and thread view, with the operator's login, the
+  mailbox and the thread. Reloads the web app makes by itself, to show new mail, carry
+  `"automatic": true`. The web app says which reads those are and the API takes its word, so
+  read the field as a guide through the log, not as proof.
 - These report problems: `console.ingest.*`, `console.auth.unavailable`, `console.jmap.failed`,
   `console.api.failed` and `console.startup-failed`.
 
 ## Security notes
 
-- **Every operator can read every agent mailbox.** Any user account in `AGENT_DOMAINS` that
-  matches `AGENT_LOCALPART_PATTERN` is an agent. Keep human mailboxes out of those domains, or
-  narrow the pattern.
-- **The principal's password can impersonate any mailbox on the server**, not only agents. The
-  console limits itself to directory agents and read-only methods, but the secret does not.
+- **Every operator can read every listed mailbox**, and by default that is every user account
+  on the server. Narrow it with `MAILBOX_DOMAINS` and `MAILBOX_LOCALPART_PATTERN`, and
+  `ALLOWED_ACCOUNTS` narrows who may look. Every read is logged as `console.view`.
+- **The principal's password can impersonate any mailbox on the server**, also those the
+  console does not list. The console limits itself to listed mailboxes and read-only methods,
+  but the secret does not.
   Store it like an administrator credential, and rotate it with `server-setup.mjs`.
 - **Token checks.**
   - The api role checks each access token by introspection at the server, authenticating as
@@ -353,7 +366,7 @@ Logs are JSON lines.
   - After a failed post, the server folds the batch into later ones until its `discardAfter`
     (one hour, as `server-setup.mjs` sets it). An outage of the console or its database
     therefore loses at most an hour of events. The merged batch stays well under the size limit
-    at typical agent-mail volumes.
+    at typical mail volumes.
   - Rejections are logged as `console.ingest.*` errors; alert on them.
   - The metrics push must carry `METRICS_PUSH_TOKEN`, compared in constant time; bodies over 4 MB
     are refused. Problems are logged as `console.metrics.*`, and tracing batches as

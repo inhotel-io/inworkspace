@@ -2,15 +2,16 @@ import "server-only";
 import path from "node:path";
 import { createTokenVerifier, forwardedClient, LOCAL_OPERATOR, type TokenVerifier } from "./auth";
 import { getConfig } from "./config";
-import { fetchAgents, type Agent, type DirectorySettings } from "./directory";
+import { fetchMailboxes, type DirectorySettings, type Mailbox, type MailboxDirectory } from "./directory";
 import { INSIGHTS_PERMISSIONS } from "./insights";
 import { JmapClient, type Credentials } from "./jmap";
 import { buildUiShell, loadUiApp, uiSettingsFrom, type UiApp, type UiShell } from "./uiBundle";
 
-const AGENT_CACHE_MS = 5 * 60 * 1000;
+const DIRECTORY_CACHE_MS = 5 * 60 * 1000;
 
 let client: JmapClient | undefined;
-let agentCache: { loadedAt: number; agents: Agent[] } | undefined;
+let directoryCache: { loadedAt: number; directory: MailboxDirectory } | undefined;
+let directoryLoading: Promise<MailboxDirectory> | undefined;
 let verifier: TokenVerifier | undefined;
 let shell: Promise<UiShell> | undefined;
 let app: Promise<UiApp> | undefined;
@@ -27,22 +28,27 @@ export function principalCredentials(): Credentials {
 
 function directorySettings(): DirectorySettings {
   const config = getConfig();
-  return { agentDomains: config.agentDomains, agentLocalpartPattern: config.agentLocalpartPattern, principal: config.jmapPrincipal };
+  return { mailboxDomains: config.mailboxDomains, mailboxLocalpartPattern: config.mailboxLocalpartPattern, principal: config.jmapPrincipal };
 }
 
-/** The agent directory, cached for five minutes. */
-export async function getAgents(): Promise<Agent[]> {
-  const now = Date.now();
-  if (agentCache && now - agentCache.loadedAt < AGENT_CACHE_MS) return agentCache.agents;
-  const agents = await fetchAgents(jmapClient(), principalCredentials(), directorySettings());
-  agentCache = { loadedAt: now, agents };
-  return agents;
+/** The mailbox directory, cached for five minutes. Requests that come in while it is read share that read. */
+export async function getMailboxes(): Promise<MailboxDirectory> {
+  if (directoryCache && Date.now() - directoryCache.loadedAt < DIRECTORY_CACHE_MS) return directoryCache.directory;
+  directoryLoading ??= fetchMailboxes(jmapClient(), principalCredentials(), directorySettings())
+    .then((directory) => {
+      directoryCache = { loadedAt: Date.now(), directory };
+      return directory;
+    })
+    .finally(() => {
+      directoryLoading = undefined;
+    });
+  return directoryLoading;
 }
 
-/** Only directory agents can be opened, so a URL cannot point the console at any other mailbox. */
-export async function findAgent(address: string): Promise<Agent | undefined> {
+/** Only listed mailboxes can be opened, so a URL cannot point the console at any other account. */
+export async function findMailbox(address: string): Promise<Mailbox | undefined> {
   const normalized = address.toLowerCase();
-  return (await getAgents()).find((agent) => agent.address === normalized);
+  return (await getMailboxes()).mailboxes.find((mailbox) => mailbox.address === normalized);
 }
 
 /** Verifies the operator behind each API request; one per process, so its cache is shared. */

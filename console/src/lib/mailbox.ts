@@ -33,8 +33,8 @@ export interface ThreadPage {
   position: number;
 }
 
-async function openMailbox(client: MailboxClient, principal: Credentials, agentAddress: string): Promise<OpenMailbox> {
-  const credentials = { username: masterUserLogin(agentAddress, principal.username), password: principal.password };
+async function openMailbox(client: MailboxClient, principal: Credentials, address: string): Promise<OpenMailbox> {
+  const credentials = { username: masterUserLogin(address, principal.username), password: principal.password };
   const session = await client.session(credentials);
   const accountId = session.primaryAccounts[JMAP_MAIL];
   if (!accountId) throw new JmapError("the mailbox has no mail account", "accountNotFound");
@@ -45,17 +45,15 @@ async function openMailbox(client: MailboxClient, principal: Credentials, agentA
   return { credentials, accountId, roles };
 }
 
-/** One page of the agent's threads, newest first, without Trash and Drafts. */
-export async function listThreads(client: MailboxClient, principal: Credentials, agentAddress: string, position: number): Promise<ThreadPage> {
-  const mailbox = await openMailbox(client, principal, agentAddress);
-  const hidden = [mailbox.roles.trash, mailbox.roles.drafts].filter((id): id is string => id !== null);
+/** One page of the mailbox's threads, newest first, from every folder: Trash and Drafts are marked. */
+export async function listThreads(client: MailboxClient, principal: Credentials, address: string, position: number): Promise<ThreadPage> {
+  const mailbox = await openMailbox(client, principal, address);
   const { accountId } = mailbox;
   const responses = await client.call(mailbox.credentials, [JMAP_CORE, JMAP_MAIL], [
     [
       "Email/query",
       {
         accountId,
-        filter: hidden.length > 0 ? { inMailboxOtherThan: hidden } : {},
         sort: [{ property: "receivedAt", isAscending: false }],
         collapseThreads: true,
         position,
@@ -74,7 +72,7 @@ export async function listThreads(client: MailboxClient, principal: Credentials,
   );
   const threads = responseOf(responses, "t").list as { id: string; emailIds: string[] }[];
   return {
-    threads: summarizeThreads(latest, threads, agentAddress, mailbox.roles),
+    threads: summarizeThreads(latest, threads, address, mailbox.roles),
     total: typeof query.total === "number" ? query.total : latest.length,
     position,
   };
@@ -84,10 +82,10 @@ export async function listThreads(client: MailboxClient, principal: Credentials,
 export async function getThread(
   client: MailboxClient,
   principal: Credentials,
-  agentAddress: string,
+  address: string,
   threadId: string,
 ): Promise<ThreadMessage[] | null> {
-  const mailbox = await openMailbox(client, principal, agentAddress);
+  const mailbox = await openMailbox(client, principal, address);
   const { accountId } = mailbox;
   const responses = await client.call(mailbox.credentials, [JMAP_CORE, JMAP_MAIL], [
     ["Thread/get", { accountId, ids: [threadId] }, "t"],
@@ -106,5 +104,5 @@ export async function getThread(
   ]);
   if ((responseOf(responses, "t").list as unknown[]).length === 0) return null;
   const emails = responseOf(responses, "e").list as JmapEmail[];
-  return buildThread(emails, agentAddress, mailbox.roles, { sanitizeHtml: sanitizeEmailHtml, htmlToText });
+  return buildThread(emails, address, mailbox.roles, { sanitizeHtml: sanitizeEmailHtml, htmlToText });
 }

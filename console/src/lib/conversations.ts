@@ -37,7 +37,7 @@ export interface MailboxRoles {
 }
 
 export type Direction = "inbound" | "outbound";
-export type ThreadStatus = "awaiting-reply" | "junk" | "automated" | "answered";
+export type ThreadStatus = "awaiting-reply" | "junk" | "automated" | "answered" | "draft" | "deleted";
 
 export interface ThreadSummary {
   threadId: string;
@@ -46,6 +46,8 @@ export interface ThreadSummary {
   messageCount: number;
   lastActivity: string;
   lastDirection: Direction;
+  /** The newest message was never sent: a draft, wherever it is now. */
+  lastDraft: boolean;
   preview: string;
   status: ThreadStatus;
 }
@@ -64,7 +66,7 @@ export interface ThreadMessage {
   truncated: boolean;
   junk: boolean;
   automated: boolean;
-  /** In Drafts: written but never sent. */
+  /** Written but never sent: in Drafts, or still marked as a draft wherever it was moved. */
   draft: boolean;
   /** In Trash. */
   deleted: boolean;
@@ -85,13 +87,27 @@ function lowercase(address: EmailAddress): EmailAddress {
   return { name: address.name, email: address.email.toLowerCase() };
 }
 
-export function directionOf(email: JmapEmail, agentAddress: string, roles: MailboxRoles): Direction {
-  if (roles.sent !== null && email.mailboxIds[roles.sent]) return "outbound";
-  return email.from?.[0]?.email.toLowerCase() === agentAddress ? "outbound" : "inbound";
+function isIn(email: JmapEmail, mailboxId: string | null): boolean {
+  return mailboxId !== null && Boolean(email.mailboxIds[mailboxId]);
+}
+
+/** Written but never sent: in Drafts, or still marked as a draft, as one moved to Trash is. */
+export function isDraft(email: JmapEmail, roles: MailboxRoles): boolean {
+  return isIn(email, roles.drafts) || Boolean(email.keywords?.$draft);
+}
+
+/**
+ * Sent mail and drafts are the mailbox's own. Inbox and Junk hold what it received, even mail that
+ * claims its own address as the sender. Anywhere else, the sender decides.
+ */
+export function directionOf(email: JmapEmail, address: string, roles: MailboxRoles): Direction {
+  if (isIn(email, roles.sent) || isDraft(email, roles)) return "outbound";
+  if (isIn(email, roles.inbox) || isIn(email, roles.junk)) return "inbound";
+  return email.from?.[0]?.email.toLowerCase() === address ? "outbound" : "inbound";
 }
 
 export function isJunk(email: JmapEmail, roles: MailboxRoles): boolean {
-  return Boolean((roles.junk !== null && email.mailboxIds[roles.junk]) || email.keywords?.$junk);
+  return isIn(email, roles.junk) || Boolean(email.keywords?.$junk);
 }
 
 /** Machine-generated mail (RFC 3834), including delivery reports, never awaits a reply. */
@@ -106,15 +122,19 @@ export function isAutomated(email: JmapEmail): boolean {
 export function summarizeThreads(
   latest: readonly JmapEmail[],
   threads: readonly { id: string; emailIds: string[] }[],
-  agentAddress: string,
+  address: string,
   roles: MailboxRoles,
 ): ThreadSummary[] {
   const counts = new Map(threads.map((thread) => [thread.id, thread.emailIds.length]));
   return latest.map((email) => {
-    const direction = directionOf(email, agentAddress, roles);
+    const direction = directionOf(email, address, roles);
+    const draft = isDraft(email, roles);
     const counterpart = direction === "inbound" ? email.from?.[0] : email.to?.[0];
     let status: ThreadStatus = "answered";
-    if (direction === "inbound") {
+    // The newest message's folder comes first: a deleted or draft one says more than its direction.
+    if (isIn(email, roles.trash)) status = "deleted";
+    else if (draft) status = "draft";
+    else if (direction === "inbound") {
       if (isJunk(email, roles)) status = "junk";
       else if (isAutomated(email)) status = "automated";
       else status = "awaiting-reply";
@@ -126,6 +146,7 @@ export function summarizeThreads(
       messageCount: counts.get(email.threadId) ?? 1,
       lastActivity: email.receivedAt,
       lastDirection: direction,
+      lastDraft: draft,
       preview: email.preview ?? "",
       status,
     };
@@ -140,7 +161,7 @@ function partValues(email: JmapEmail, parts: readonly BodyPart[]): string[] {
 
 export function buildThread(
   emails: readonly JmapEmail[],
-  agentAddress: string,
+  address: string,
   roles: MailboxRoles,
   renderers: BodyRenderers,
 ): ThreadMessage[] {
@@ -151,7 +172,7 @@ export function buildThread(
       const html = htmlParts.length > 0 ? renderers.sanitizeHtml(partValues(email, htmlParts).join("\n")) : null;
       let text = partValues(email, email.textBody ?? []).join("\n\n").trim();
       if (!text && html) text = renderers.htmlToText(html);
-      const direction = directionOf(email, agentAddress, roles);
+      const direction = directionOf(email, address, roles);
       return {
         id: email.id,
         direction,
@@ -165,8 +186,8 @@ export function buildThread(
         truncated: Object.values(email.bodyValues ?? {}).some((value) => value.isTruncated === true),
         junk: direction === "inbound" && isJunk(email, roles),
         automated: direction === "inbound" && isAutomated(email),
-        draft: roles.drafts !== null && Boolean(email.mailboxIds[roles.drafts]),
-        deleted: roles.trash !== null && Boolean(email.mailboxIds[roles.trash]),
+        draft: isDraft(email, roles),
+        deleted: isIn(email, roles.trash),
         attachments: (email.attachments ?? []).map((part) => ({ name: part.name ?? "(unnamed)", size: part.size, type: part.type })),
       };
     });

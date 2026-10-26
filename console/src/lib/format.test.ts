@@ -38,13 +38,18 @@ describe("format", () => {
   });
 
   it("writes one JSON audit line", () => {
-    expect(JSON.parse(auditLine({ operator: "alex@example.com", agent: "a@agents.example.test", threadId: "b" }, new Date("2026-10-25T12:00:00Z")))).toEqual({
+    expect(JSON.parse(auditLine({ operator: "alex@example.com", mailbox: "a@example.test", threadId: "b" }, new Date("2026-10-25T12:00:00Z")))).toEqual({
       severity: "NOTICE",
       message: "console.view",
       operator: "alex@example.com",
-      agent: "a@agents.example.test",
+      mailbox: "a@example.test",
       threadId: "b",
       at: "2026-10-25T12:00:00.000Z",
     });
+  });
+
+  it("marks the reads the web app makes by itself", () => {
+    const line = JSON.parse(auditLine({ operator: "alex@example.com", mailbox: "a@example.test", automatic: true }, new Date("2026-10-25T12:00:00Z")));
+    expect(line).toMatchObject({ mailbox: "a@example.test", threadId: null, automatic: true });
   });
 });

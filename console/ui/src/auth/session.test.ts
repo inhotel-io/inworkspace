@@ -51,7 +51,7 @@ async function startedSignIn(store: Store, returnTo = "/events?severity=error") 
 
 describe("safeReturnTo", () => {
   it("keeps paths inside the app and nothing else", () => {
-    expect(safeReturnTo("/agents/a1%40example.com")).toBe("/agents/a1%40example.com");
+    expect(safeReturnTo("/mailboxes/a1%40example.com")).toBe("/mailboxes/a1%40example.com");
     expect(safeReturnTo("//attacker.example/")).toBe("/");
     expect(safeReturnTo("https://attacker.example/")).toBe("/");
     expect(safeReturnTo(null)).toBe("/");

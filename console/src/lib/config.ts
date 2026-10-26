@@ -17,8 +17,10 @@ export interface ConsoleConfig {
   jmapUrl: string;
   jmapPrincipal: string;
   jmapPrincipalSecret: string;
-  agentDomains: string[];
-  agentLocalpartPattern: RegExp | null;
+  /** Domains whose accounts the console lists as mailboxes; empty lists every domain on the server. */
+  mailboxDomains: string[];
+  /** Optional: the whole local part of a listed mailbox must match. */
+  mailboxLocalpartPattern: RegExp | null;
   /** Origin at which browsers reach the api role. */
   publicUrl: string;
   authMode: AuthMode;
@@ -136,8 +138,8 @@ export function parseConfig(env: Env): ConsoleConfig {
   if (queueReader && !servesApi({ role })) jmapUrl = origin("JMAP_URL", "https://mail.example.com");
   let jmapPrincipal = "";
   let jmapPrincipalSecret = "";
-  let agentDomains: string[] = [];
-  let agentLocalpartPattern: RegExp | null = null;
+  let mailboxDomains: string[] = [];
+  let mailboxLocalpartPattern: RegExp | null = null;
   let publicUrl = "";
   let authMode: AuthMode = "server";
   let operatorPermission = "impersonate";
@@ -151,15 +153,17 @@ export function parseConfig(env: Env): ConsoleConfig {
     jmapUrl = origin("JMAP_URL", "https://mail.example.com");
     jmapPrincipal = need("JMAP_PRINCIPAL").toLowerCase();
     jmapPrincipalSecret = need("JMAP_PRINCIPAL_SECRET");
-    agentDomains = list(env, "AGENT_DOMAINS");
-    if (agentDomains.length === 0) problems.push("AGENT_DOMAINS is required");
-
-    const pattern = text(env, "AGENT_LOCALPART_PATTERN");
+    // AGENT_DOMAINS and AGENT_LOCALPART_PATTERN are the names before 0.4. They are read only while
+    // neither new name is set: an upgrade keeps its list, and setting either new name replaces both.
+    const legacy = !text(env, "MAILBOX_DOMAINS") && !text(env, "MAILBOX_LOCALPART_PATTERN");
+    mailboxDomains = list(env, legacy ? "AGENT_DOMAINS" : "MAILBOX_DOMAINS");
+    const patternName = legacy ? "AGENT_LOCALPART_PATTERN" : "MAILBOX_LOCALPART_PATTERN";
+    const pattern = text(env, patternName);
     if (pattern) {
       try {
-        agentLocalpartPattern = new RegExp(`^(?:${pattern})$`);
+        mailboxLocalpartPattern = new RegExp(`^(?:${pattern})$`);
       } catch {
-        problems.push("AGENT_LOCALPART_PATTERN is not a valid regular expression");
+        problems.push(`${patternName} is not a valid regular expression`);
       }
     }
 
@@ -216,8 +220,8 @@ export function parseConfig(env: Env): ConsoleConfig {
     jmapUrl,
     jmapPrincipal,
     jmapPrincipalSecret,
-    agentDomains,
-    agentLocalpartPattern,
+    mailboxDomains,
+    mailboxLocalpartPattern,
     publicUrl,
     authMode,
     operatorPermission,

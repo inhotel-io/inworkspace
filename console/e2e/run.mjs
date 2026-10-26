@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // End-to-end run: a real inWorkspace server and Postgres in Docker, the console built from this
-// directory, real mail over SMTP, an agent reply over JMAP, and sign-in through the server's own
+// directory, real mail over SMTP, a reply sent from a mailbox over JMAP, and sign-in through the server's own
 // OAuth endpoints. Run `npm run build` first. `node e2e/run.mjs --keep` leaves everything running.
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -29,15 +29,18 @@ const CONSOLE = `http://localhost:${PORT}`;
 /** How the mail server, inside Docker, reaches the console on this machine. */
 const CONSOLE_FROM_SERVER = `http://host.docker.internal:${PORT}`;
 const DATABASE_URL = "postgres://console:console@localhost:15432/console";
-const DOMAIN = "agents.example.test";
-const AGENT = `a21i3v9v@${DOMAIN}`;
+const DOMAIN = "hotel.example.test";
+/** A second domain: with MAILBOX_DOMAINS unset, the console lists the mailboxes of every domain. */
+const SPA_DOMAIN = "spa.example.test";
+const MAILBOX = `frontdesk@${DOMAIN}`;
 const GUEST = "jane@example.com";
 const CLIENT_ID = "inworkspace-console";
 const REDIRECT_URI = `${SERVER}/console/oauth/callback`;
 const secret = () => randomBytes(24).toString("hex");
 const adminSecret = secret();
 const principalSecret = secret();
-const runtimeSecret = secret();
+const frontDeskSecret = secret();
+const operatorSecret = secret();
 const viewerSecret = secret();
 const signingKey = secret();
 
@@ -128,6 +131,7 @@ async function apiJson(path, token) {
 }
 
 let consoleProcess;
+let consoleOutput = "";
 try {
   step("Starting a fresh inWorkspace server and Postgres");
   docker(["down", "-v", "--remove-orphans"]);
@@ -135,14 +139,16 @@ try {
   await waitFor("the mail server", async () => (await fetch(`${SERVER}/healthz/live`)).ok);
   const admin = new RegistryClient(SERVER, "admin", adminSecret);
 
-  step("Creating the agent domain, two agents, an agent runtime, a plain user, the console principal and the webhook");
+  step("Creating two domains, their mailboxes (one an operator's), the console principal and the webhook");
   await admin.one("x:Domain/set", { create: { d: { name: DOMAIN } } });
-  await ensureAccount(admin, { address: AGENT, description: "Front desk agent" });
-  await ensureAccount(admin, { address: `a000001e@${DOMAIN}`, description: "Concierge agent" });
+  await admin.one("x:Domain/set", { create: { d: { name: SPA_DOMAIN } } });
+  await ensureAccount(admin, { address: MAILBOX, description: "Front desk", secret: frontDeskSecret });
+  await ensureAccount(admin, { address: `concierge@${DOMAIN}`, description: "Concierge" });
+  await ensureAccount(admin, { address: `bookings@${SPA_DOMAIN}`, description: "Spa bookings" });
   await ensureAccount(admin, {
-    address: `runtime@${DOMAIN}`,
-    description: "Agent runtime",
-    secret: runtimeSecret,
+    address: `ops@${DOMAIN}`,
+    description: "Operations",
+    secret: operatorSecret,
     permissions: { "@type": "Merge", enabledPermissions: { impersonate: true }, disabledPermissions: {} },
   });
   await ensureAccount(admin, { address: `viewer@${DOMAIN}`, description: "Plain user", secret: viewerSecret });
@@ -161,7 +167,7 @@ try {
   rmSync(`${root}.next/standalone/ui-dist`, { recursive: true, force: true });
   cpSync(`${root}ui-dist`, `${root}.next/standalone/ui-dist`, { recursive: true });
   consoleProcess = spawn("node", [`${root}.next/standalone/server.js`], {
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", "pipe", "inherit"],
     env: {
       ...process.env,
       PORT: String(PORT),
@@ -172,10 +178,13 @@ try {
       JMAP_URL: SERVER,
       JMAP_PRINCIPAL: `console@${DOMAIN}`,
       JMAP_PRINCIPAL_SECRET: principalSecret,
-      AGENT_DOMAINS: DOMAIN,
-      AGENT_LOCALPART_PATTERN: "a[0-9a-z]{7}",
       PUBLIC_URL: CONSOLE,
     },
+  });
+  // Shown as it comes, and kept for the audit lines.
+  consoleProcess.stdout.on("data", (chunk) => {
+    process.stdout.write(chunk);
+    consoleOutput += chunk;
   });
   await waitFor("the console", async () => (await fetch(`${CONSOLE}/healthz`)).ok);
 
@@ -213,15 +222,17 @@ try {
   const again = await ensureApplication(admin, { prefix: "console", resourceUrl });
   expect(!again.created, "registering the same shell again changes nothing");
 
-  step("Sending a guest message, a message to a mailbox that does not exist, and an agent reply");
-  const inbound = await sendMail({
+  step("Sending a guest message, a message to a mailbox that does not exist, and the front desk's reply");
+  // Right after a restart the first session can stall while the server loads its spam model.
+  const sendOnce = (message) => sendMail(message).catch(() => sendMail(message));
+  const inbound = await sendOnce({
     host: "localhost",
     port: 12525,
     from: GUEST,
-    to: AGENT,
+    to: MAILBOX,
     data: [
       `From: Jane Guest <${GUEST}>`,
-      `To: ${AGENT}`,
+      `To: ${MAILBOX}`,
       "Subject: Late check-in on Friday?",
       "Message-ID: <e2e-1@example.com>",
       `Date: ${new Date().toUTCString()}`,
@@ -243,21 +254,22 @@ try {
   const refused = await sendMail({ host: "localhost", port: 12525, from: GUEST, to: `ghost@${DOMAIN}`, data: "Subject: hello\n\nanyone?" });
   if (refused.accepted) throw new Error("mail to a missing mailbox was accepted");
 
-  const runtimeLogin = `${AGENT}%runtime@${DOMAIN}`;
   const mailUsing = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"];
-  const session = await (await fetch(`${SERVER}/jmap/session`, { headers: { Authorization: basic(runtimeLogin, runtimeSecret) } })).json();
+  const session = await (await fetch(`${SERVER}/jmap/session`, { headers: { Authorization: basic(MAILBOX, frontDeskSecret) } })).json();
   const accountId = session.primaryAccounts["urn:ietf:params:jmap:mail"];
   const inboundEmail = await waitFor("the guest message in the mailbox", async () => {
-    const [[, mailboxes], , [, emails], [, identities]] = await jmapAs(runtimeLogin, runtimeSecret, mailUsing, [
+    const [[, mailboxes], , [, emails], [, identities]] = await jmapAs(MAILBOX, frontDeskSecret, mailUsing, [
       ["Mailbox/get", { accountId, ids: null, properties: ["role"] }, "m"],
       ["Email/query", { accountId, sort: [{ property: "receivedAt", isAscending: false }], limit: 20 }, "q"],
       ["Email/get", { accountId, "#ids": { resultOf: "q", name: "Email/query", path: "/ids" }, properties: ["threadId", "messageId"] }, "g"],
       ["Identity/get", { accountId }, "i"],
     ]);
     const email = emails.list.find((candidate) => candidate.messageId?.includes("e2e-1@example.com"));
-    return email && { ...email, sent: mailboxes.list.find((mailbox) => mailbox.role === "sent").id, identity: identities.list[0]?.id };
+    const folder = (role) => mailboxes.list.find((mailbox) => mailbox.role === role)?.id;
+    return email && { ...email, sent: folder("sent"), drafts: folder("drafts"), trash: folder("trash"), junk: folder("junk"), identity: identities.list[0]?.id };
   });
-  const [[, created], [, submitted]] = await jmapAs(runtimeLogin, runtimeSecret, mailUsing, [
+  const textBody = (value) => ({ bodyValues: { t: { value } }, textBody: [{ partId: "t", type: "text/plain" }] });
+  const [[, created], [, submitted]] = await jmapAs(MAILBOX, frontDeskSecret, mailUsing, [
     [
       "Email/set",
       {
@@ -266,13 +278,47 @@ try {
           r: {
             mailboxIds: { [inboundEmail.sent]: true },
             keywords: { $seen: true },
-            from: [{ name: "Front desk agent", email: AGENT }],
+            from: [{ name: "Front desk", email: MAILBOX }],
             to: [{ name: "Jane Guest", email: GUEST }],
             subject: "Re: Late check-in on Friday?",
             inReplyTo: ["e2e-1@example.com"],
             references: ["e2e-1@example.com"],
-            bodyValues: { t: { value: "Hi Jane, yes - late check-in at 11pm is fine. The night desk will have your key." } },
-            textBody: [{ partId: "t", type: "text/plain" }],
+            ...textBody("Hi Jane, yes - late check-in at 11pm is fine. The night desk will have your key."),
+          },
+          // Not sent: the console lists drafts and mail in Trash too, marked.
+          d: {
+            mailboxIds: { [inboundEmail.drafts]: true },
+            keywords: { $draft: true, $seen: true },
+            from: [{ name: "Front desk", email: MAILBOX }],
+            to: [{ name: "Jane Guest", email: GUEST }],
+            subject: "Spa offer for Jane",
+            ...textBody("Hi Jane, would you like a massage on Saturday?"),
+          },
+          t: {
+            mailboxIds: { [inboundEmail.trash]: true },
+            keywords: { $seen: true },
+            from: [{ name: "Weekly deals", email: "deals@example.com" }],
+            to: [{ email: MAILBOX }],
+            subject: "This week's deals",
+            ...textBody("Unsubscribe any time."),
+          },
+          // A draft thrown away: in Trash, still marked as a draft. It was never sent.
+          o: {
+            mailboxIds: { [inboundEmail.trash]: true },
+            keywords: { $draft: true, $seen: true },
+            from: [{ name: "Front desk", email: MAILBOX }],
+            to: [{ name: "Jane Guest", email: GUEST }],
+            subject: "Old draft for Jane",
+            ...textBody("Never mind."),
+          },
+          // Spam that claims to come from the mailbox itself, filed in Junk: received, not sent.
+          j: {
+            mailboxIds: { [inboundEmail.junk]: true },
+            keywords: { $junk: true },
+            from: [{ email: MAILBOX }],
+            to: [{ email: MAILBOX }],
+            subject: "Your mailbox is full",
+            ...textBody("Click here."),
           },
         },
       },
@@ -282,12 +328,14 @@ try {
       "EmailSubmission/set",
       {
         accountId,
-        create: { s: { emailId: "#r", identityId: inboundEmail.identity, envelope: { mailFrom: { email: AGENT }, rcptTo: [{ email: GUEST }] } } },
+        create: { s: { emailId: "#r", identityId: inboundEmail.identity, envelope: { mailFrom: { email: MAILBOX }, rcptTo: [{ email: GUEST }] } } },
       },
       "x",
     ],
   ]);
-  if (!created.created?.r || !submitted.created?.s) throw new Error(`the agent reply failed: ${JSON.stringify([created, submitted])}`);
+  if (["r", "d", "t", "o", "j"].some((key) => !created.created?.[key]) || !submitted.created?.s) {
+    throw new Error(`the reply or the other messages failed: ${JSON.stringify([created, submitted])}`);
+  }
 
   step("Waiting for the server's events in Postgres");
   const db = new pg.Client({ connectionString: DATABASE_URL });
@@ -309,19 +357,32 @@ try {
   expect(me.body.login === "admin", "the API knows the operator as admin");
   expect(me.response.headers.get("access-control-allow-origin") === SERVER, "the API allows the server's origin");
   const overview = (await apiJson("overview", token)).body;
+  const listed = overview.mailboxes?.map((mailbox) => mailbox.address) ?? [];
   expect(
-    ["Front desk agent", "Concierge agent"].every((name) => overview.agents?.some((agent) => agent.name === name)),
-    "the overview lists both agents",
+    [MAILBOX, `concierge@${DOMAIN}`, `bookings@${SPA_DOMAIN}`, `ops@${DOMAIN}`, `viewer@${DOMAIN}`].every((address) => listed.includes(address)),
+    "the overview lists every mailbox of both domains",
   );
-  expect(overview.totals.repliesSent >= 1, "the overview counts the agent's reply");
-  const agentPath = `agents/${encodeURIComponent(AGENT)}/threads`;
-  const thread = (await apiJson(agentPath, token)).body.threads.find((candidate) => candidate.subject.includes("Late check-in on Friday?"));
+  expect(!listed.includes(`console@${DOMAIN}`), "but not the console's own account");
+  expect(overview.domains.includes(DOMAIN) && overview.domains.includes(SPA_DOMAIN), "and names both domains");
+  expect(overview.mailboxes.find((mailbox) => mailbox.address === MAILBOX)?.name === "Front desk", "a mailbox is named by its description");
+  expect(overview.totals.sent >= 1, "the overview counts the front desk's reply");
+  const directory = (await apiJson("mailboxes", token)).body.mailboxes;
+  expect(directory.length === listed.length && directory.every((mailbox) => listed.includes(mailbox.address)), "the mailbox list matches the overview");
+  const mailboxPath = `mailboxes/${encodeURIComponent(MAILBOX)}/threads`;
+  const threads = (await apiJson(mailboxPath, token)).body.threads;
+  const thread = threads.find((candidate) => candidate.subject.includes("Late check-in on Friday?"));
   expect(thread?.status === "answered", "the conversation is listed as answered");
-  const messages = (await apiJson(`${agentPath}/${thread.threadId}`, token)).body.messages;
+  expect(threads.find((candidate) => candidate.subject === "Spa offer for Jane")?.status === "draft", "a draft is listed, marked as a draft");
+  expect(threads.find((candidate) => candidate.subject === "This week's deals")?.status === "deleted", "mail in Trash is listed, marked as deleted");
+  const discarded = threads.find((candidate) => candidate.subject === "Old draft for Jane");
+  expect(discarded?.status === "deleted" && discarded.lastDraft, "a draft thrown in Trash stays a draft, never shown as sent");
+  const spoofed = threads.find((candidate) => candidate.subject === "Your mailbox is full");
+  expect(spoofed?.status === "junk" && spoofed.lastDirection === "inbound", "spam in Junk that claims the mailbox's own address counts as received junk");
+  const messages = (await apiJson(`${mailboxPath}/${thread.threadId}`, token)).body.messages;
   expect(
     messages.some((message) => message.direction === "inbound" && message.text.includes("Hi, can I check in at 11pm on Friday?")) &&
       messages.some((message) => message.direction === "outbound" && message.text.includes("The night desk will have your key.")),
-    "the thread has the guest's message and the agent's reply",
+    "the thread has the guest's message and the front desk's reply",
   );
   const formatted = messages.find((message) => message.direction === "inbound")?.html ?? "";
   expect(
@@ -332,8 +393,29 @@ try {
   expect(events.some((event) => event.type === "delivery.dsn-perm-fail" && JSON.stringify(event.data).includes("null MX")), "the events include the bounce");
   const live = (await apiJson("events?after=0", token)).body;
   expect(live.events.length > 0 && live.pageSize === 200, "live mode returns events after an id");
-  const outside = await api(`agents/${encodeURIComponent(`runtime@${DOMAIN}`)}/threads`, { token });
-  expect(outside.status === 404, "a mailbox outside the agent directory is not opened");
+  const own = await api(`mailboxes/${encodeURIComponent(`console@${DOMAIN}`)}/threads`, { token });
+  expect(own.status === 404, "the console's own account is not opened");
+  const ghost = await api(`mailboxes/${encodeURIComponent(`ghost@${DOMAIN}`)}/threads`, { token });
+  expect(ghost.status === 404 && (await ghost.json()).error.message === "There is no mailbox at this address.", "an address without a mailbox gets 404");
+
+  step("Checking the audit log");
+  expect((await api(`${mailboxPath}?refresh=1`, { token })).status === 200, "the web app's automatic reload is answered");
+  const views = await waitFor(
+    "the audit lines",
+    async () => {
+      const lines = consoleOutput
+        .split("\n")
+        .filter((line) => line.startsWith("{") && line.includes('"console.view"'))
+        .map((line) => JSON.parse(line));
+      return lines.some((line) => line.automatic === true) ? lines : null;
+    },
+    10000,
+  );
+  expect(
+    views.length === 3 && views.every((line) => line.operator === "admin" && line.mailbox === MAILBOX),
+    "each read of a mailbox is logged once, with the operator and the mailbox",
+  );
+  expect(views.filter((line) => line.automatic === true).length === 1 && views.filter((line) => line.threadId).length === 1, "the automatic reload and the thread read are told apart");
 
   step("Checking what the API refuses");
   expect((await api("me")).status === 401, "a request without a token gets 401");
@@ -359,8 +441,8 @@ try {
   });
   const renewed = await refreshed.json();
   expect(refreshed.ok && (await api("me", { token: renewed.access_token })).status === 200, "a refreshed access token works");
-  const operator = await signIn(`runtime@${DOMAIN}`, runtimeSecret);
-  const together = await Promise.all(["me", "overview", "agents", "events?window=1h"].map((path) => api(path, { token: operator.access_token })));
+  const operator = await signIn(`ops@${DOMAIN}`, operatorSecret);
+  const together = await Promise.all(["me", "overview", "mailboxes", "events?window=1h"].map((path) => api(path, { token: operator.access_token })));
   expect(
     together.every((response) => response.status === 200),
     "an operator with only the impersonate permission can send a page's requests at once",

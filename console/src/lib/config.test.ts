@@ -7,7 +7,7 @@ const API = {
   JMAP_URL: "https://mail.example.com/",
   JMAP_PRINCIPAL: "Console@Example.com",
   JMAP_PRINCIPAL_SECRET: "secret",
-  AGENT_DOMAINS: "Agents.Example.com, other.example.com",
+  MAILBOX_DOMAINS: "Example.com, other.example.com",
   PUBLIC_URL: "https://console-api.example.com/",
 };
 
@@ -34,7 +34,8 @@ describe("parseConfig", () => {
     expect(config.jmapUrl).toBe("https://mail.example.com");
     expect(config.publicUrl).toBe("https://console-api.example.com");
     expect(config.jmapPrincipal).toBe("console@example.com");
-    expect(config.agentDomains).toEqual(["agents.example.com", "other.example.com"]);
+    expect(config.mailboxDomains).toEqual(["example.com", "other.example.com"]);
+    expect(config.mailboxLocalpartPattern).toBeNull();
     expect(config.authMode).toBe("server");
     expect(config.operatorPermission).toBe("impersonate");
     expect(config.allowedAccounts).toEqual([]);
@@ -134,7 +135,6 @@ describe("parseConfig", () => {
         "JMAP_URL is required",
         "JMAP_PRINCIPAL is required",
         "JMAP_PRINCIPAL_SECRET is required",
-        "AGENT_DOMAINS is required",
         "PUBLIC_URL is required",
       ]),
     );
@@ -195,15 +195,36 @@ describe("parseConfig", () => {
   });
 
   it("anchors the local-part pattern", () => {
-    const config = parseConfig({ ...API, AGENT_LOCALPART_PATTERN: "a[0-9a-z]{7}" });
-    expect(config.agentLocalpartPattern?.test("a21i3v9v")).toBe(true);
-    expect(config.agentLocalpartPattern?.test("xa21i3v9v")).toBe(false);
+    const config = parseConfig({ ...API, MAILBOX_LOCALPART_PATTERN: "a[0-9a-z]{7}" });
+    expect(config.mailboxLocalpartPattern?.test("a21i3v9v")).toBe(true);
+    expect(config.mailboxLocalpartPattern?.test("xa21i3v9v")).toBe(false);
+  });
+
+  it("lists every domain when no mailbox domains are set", () => {
+    const { MAILBOX_DOMAINS: _unset, ...rest } = API;
+    expect(parseConfig(rest).mailboxDomains).toEqual([]);
+  });
+
+  it("still reads the settings' names from before 0.4", () => {
+    const { MAILBOX_DOMAINS: _unset, ...rest } = API;
+    const config = parseConfig({ ...rest, AGENT_DOMAINS: "Agents.Example.com", AGENT_LOCALPART_PATTERN: "a[0-9]+" });
+    expect(config.mailboxDomains).toEqual(["agents.example.com"]);
+    expect(config.mailboxLocalpartPattern?.test("a1")).toBe(true);
+    expect(parseConfig({ ...API, AGENT_DOMAINS: "ignored.example.com" }).mailboxDomains).toEqual(["example.com", "other.example.com"]);
+  });
+
+  it("reads the old names as a pair: either new name replaces both", () => {
+    expect(parseConfig({ ...API, AGENT_LOCALPART_PATTERN: "a[0-9]+" }).mailboxLocalpartPattern).toBeNull();
+    const { MAILBOX_DOMAINS: _unset, ...rest } = API;
+    const config = parseConfig({ ...rest, MAILBOX_LOCALPART_PATTERN: "[a-z]+", AGENT_DOMAINS: "agents.example.com" });
+    expect(config.mailboxDomains).toEqual([]);
+    expect(config.mailboxLocalpartPattern?.test("alex")).toBe(true);
   });
 
   it("rejects an invalid local-part pattern and time zone", () => {
-    expect(problemsOf({ ...API, AGENT_LOCALPART_PATTERN: "(", DISPLAY_TIME_ZONE: "Mars/Olympus" })).toEqual(
+    expect(problemsOf({ ...API, MAILBOX_LOCALPART_PATTERN: "(", DISPLAY_TIME_ZONE: "Mars/Olympus" })).toEqual(
       expect.arrayContaining([
-        "AGENT_LOCALPART_PATTERN is not a valid regular expression",
+        "MAILBOX_LOCALPART_PATTERN is not a valid regular expression",
         "DISPLAY_TIME_ZONE is not a valid IANA time zone",
       ]),
     );

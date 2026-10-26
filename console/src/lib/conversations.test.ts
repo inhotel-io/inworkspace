@@ -31,6 +31,35 @@ describe("summarizeThreads", () => {
     expect(summaries[0]).toMatchObject({ subject: "Re: Parking at the hotel", lastDirection: "outbound", lastActivity: "2026-10-25T11:20:29Z" });
   });
 
+  it("marks a thread whose newest message is deleted or a draft", () => {
+    const [deleted, draft] = summarizeThreads(
+      [
+        { ...fixture.latest[3]!, mailboxIds: { b: true } },
+        { ...fixture.latest[0]!, mailboxIds: { d: true } },
+      ],
+      fixture.threads,
+      AGENT,
+      roles,
+    );
+    expect(deleted?.status).toBe("deleted");
+    expect([draft?.status, draft?.lastDraft]).toEqual(["draft", true]);
+  });
+
+  it("keeps a discarded draft in Trash a draft, never a sent message", () => {
+    const [discarded] = summarizeThreads(
+      [{ ...fixture.latest[0]!, mailboxIds: { b: true }, keywords: { $draft: true } }],
+      fixture.threads,
+      AGENT,
+      roles,
+    );
+    expect([discarded?.status, discarded?.lastDraft, discarded?.lastDirection]).toEqual(["deleted", true, "outbound"]);
+  });
+
+  it("files mail in Junk that claims the mailbox's own address as junk it received", () => {
+    const [spoofed] = summarizeThreads([{ ...fixture.latest[0]!, mailboxIds: { c: true } }], fixture.threads, AGENT, roles);
+    expect([spoofed?.status, spoofed?.lastDirection, spoofed?.lastDraft]).toEqual(["junk", "inbound", false]);
+  });
+
   it("names threads without a subject", () => {
     const [summary] = summarizeThreads([{ ...fixture.latest[3]!, subject: "  " }], fixture.threads, AGENT, roles);
     expect(summary?.subject).toBe("(no subject)");
@@ -38,10 +67,16 @@ describe("summarizeThreads", () => {
 });
 
 describe("directionOf", () => {
-  it("treats Sent or the agent's own address as outbound", () => {
+  it("treats Sent, drafts and the mailbox's own address elsewhere as outbound", () => {
     expect(directionOf(fixture.latest[0]!, AGENT, roles)).toBe("outbound");
-    expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { a: true } }, AGENT, roles)).toBe("outbound");
+    expect(directionOf({ ...fixture.latest[3]!, mailboxIds: { d: true } }, AGENT, roles)).toBe("outbound");
+    expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { archive: true } }, AGENT, roles)).toBe("outbound");
     expect(directionOf(fixture.latest[3]!, AGENT, roles)).toBe("inbound");
+  });
+
+  it("treats Inbox and Junk as received, whoever the sender claims to be", () => {
+    expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { a: true } }, AGENT, roles)).toBe("inbound");
+    expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { c: true } }, AGENT, roles)).toBe("inbound");
   });
 });
 

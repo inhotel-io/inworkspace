@@ -36,8 +36,8 @@ const ZIP_PORT = 3101;
 const CONSOLE = `http://localhost:${PORT}`;
 const FROM_SERVER = (port) => `http://host.docker.internal:${port}`;
 const DATABASE_URL = "postgres://console:console@localhost:15432/console";
-const DOMAIN = "agents.example.test";
-const AGENT = `a21i3v9v@${DOMAIN}`;
+const DOMAIN = "hotel.example.test";
+const MAILBOX = `frontdesk@${DOMAIN}`;
 const GUEST = "jane@example.com";
 const CLIENT_ID = "inworkspace-console";
 const REDIRECT_URI = `${SERVER}/console/oauth/callback`;
@@ -45,7 +45,7 @@ const secret = () => randomBytes(24).toString("hex");
 // Set E2E_ADMIN_SECRET to sign in to the web admin yourself after a --keep run.
 const adminSecret = process.env.E2E_ADMIN_SECRET || secret();
 const principalSecret = secret();
-const runtimeSecret = secret();
+const operatorSecret = secret();
 const viewerSecret = secret();
 const watcherSecret = secret();
 const signingKey = secret();
@@ -152,11 +152,11 @@ try {
 
   step("Creating the accounts, the console principal with its queue reader, both webhooks and the metrics push");
   await admin.one("x:Domain/set", { create: { d: { name: DOMAIN } } });
-  await ensureAccount(admin, { address: AGENT, description: "Front desk agent" });
+  await ensureAccount(admin, { address: MAILBOX, description: "Front desk" });
   await ensureAccount(admin, {
-    address: `runtime@${DOMAIN}`,
-    description: "Agent runtime",
-    secret: runtimeSecret,
+    address: `ops@${DOMAIN}`,
+    description: "Operations",
+    secret: operatorSecret,
     permissions: { "@type": "Merge", enabledPermissions: { impersonate: true }, disabledPermissions: {} },
   });
   await ensureAccount(admin, { address: `viewer@${DOMAIN}`, description: "Plain user", secret: viewerSecret });
@@ -217,8 +217,7 @@ try {
       JMAP_URL: SERVER,
       JMAP_PRINCIPAL: `console@${DOMAIN}`,
       JMAP_PRINCIPAL_SECRET: principalSecret,
-      AGENT_DOMAINS: DOMAIN,
-      AGENT_LOCALPART_PATTERN: "a[0-9a-z]{7}",
+      MAILBOX_DOMAINS: DOMAIN,
       PUBLIC_URL: CONSOLE,
     },
   });
@@ -248,24 +247,24 @@ try {
   const shell = await (await fetch(`${SERVER}/console/`)).text();
   expect(shell.includes(`name="inworkspace-console-api" content="${CONSOLE}"`), "the console page at /console names the API the web admin uses");
 
-  step("Sending mail: a guest message, one to a missing mailbox, an agent reply, and a failed sign-in");
+  step("Sending mail: a guest message, one to a missing mailbox, a reply, and a failed sign-in");
   // Right after a restart the first session can stall while the server loads its spam model.
   const sendOnce = (message) => sendMail(message).catch(() => sendMail(message));
   const inbound = await sendOnce({
     host: "localhost",
     port: 12525,
     from: GUEST,
-    to: AGENT,
-    data: `From: Jane Guest <${GUEST}>\nTo: ${AGENT}\nSubject: Late check-in on Friday?\nMessage-ID: <insights-1@example.com>\nDate: ${new Date().toUTCString()}\n\nHi, can I check in at 11pm on Friday? Thanks, Jane`,
+    to: MAILBOX,
+    data: `From: Jane Guest <${GUEST}>\nTo: ${MAILBOX}\nSubject: Late check-in on Friday?\nMessage-ID: <insights-1@example.com>\nDate: ${new Date().toUTCString()}\n\nHi, can I check in at 11pm on Friday? Thanks, Jane`,
   });
   if (!inbound.accepted) throw new Error(`the guest message was refused: ${inbound.reply}`);
   await sendMail({ host: "localhost", port: 12525, from: GUEST, to: `ghost@${DOMAIN}`, data: "Subject: hello\n\nanyone?" });
-  const runtimeLogin = `${AGENT}%runtime@${DOMAIN}`;
+  const operatorLogin = `${MAILBOX}%ops@${DOMAIN}`;
   const mailUsing = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:submission"];
-  const session = await (await fetch(`${SERVER}/jmap/session`, { headers: { Authorization: basic(runtimeLogin, runtimeSecret) } })).json();
+  const session = await (await fetch(`${SERVER}/jmap/session`, { headers: { Authorization: basic(operatorLogin, operatorSecret) } })).json();
   const accountId = session.primaryAccounts["urn:ietf:params:jmap:mail"];
   const mailbox = await waitFor("the guest message in the mailbox", async () => {
-    const [[, mailboxes], [, identities], , [, emails]] = await jmapAs(runtimeLogin, runtimeSecret, mailUsing, [
+    const [[, mailboxes], [, identities], , [, emails]] = await jmapAs(operatorLogin, operatorSecret, mailUsing, [
       ["Mailbox/get", { accountId, ids: null, properties: ["role"] }, "m"],
       ["Identity/get", { accountId }, "i"],
       ["Email/query", { accountId, limit: 5 }, "q"],
@@ -274,7 +273,7 @@ try {
     const arrived = emails.list.some((email) => email.messageId?.includes("insights-1@example.com"));
     return arrived && { sent: mailboxes.list.find((box) => box.role === "sent").id, identity: identities.list[0]?.id };
   });
-  await jmapAs(runtimeLogin, runtimeSecret, mailUsing, [
+  await jmapAs(operatorLogin, operatorSecret, mailUsing, [
     [
       "Email/set",
       {
@@ -282,7 +281,7 @@ try {
         create: {
           r: {
             mailboxIds: { [mailbox.sent]: true },
-            from: [{ email: AGENT }],
+            from: [{ email: MAILBOX }],
             to: [{ email: GUEST }],
             subject: "Re: Late check-in on Friday?",
             bodyValues: { t: { value: "Hi Jane, yes - 11pm is fine." } },
@@ -292,7 +291,7 @@ try {
       },
       "e",
     ],
-    ["EmailSubmission/set", { accountId, create: { s: { emailId: "#r", identityId: mailbox.identity, envelope: { mailFrom: { email: AGENT }, rcptTo: [{ email: GUEST }] } } } }, "x"],
+    ["EmailSubmission/set", { accountId, create: { s: { emailId: "#r", identityId: mailbox.identity, envelope: { mailFrom: { email: MAILBOX }, rcptTo: [{ email: GUEST }] } } } }, "x"],
   ]);
   await fetch(`${SERVER}/jmap/session`, { headers: { Authorization: basic(`viewer@${DOMAIN}`, "wrong-password") } });
 
@@ -322,7 +321,7 @@ try {
       ["x:Trace/get", { "#ids": { resultOf: "0", name: "x:Trace/query", path: "/ids" }, properties: ["id", "timestamp", "from", "to", "size"] }, "1"],
     ]);
     const [, list] = body.methodResponses[1];
-    return list.list.find((trace) => trace.from === GUEST && trace.to.includes(AGENT) && trace.size > 0);
+    return list.list.find((trace) => trace.from === GUEST && trace.to.includes(MAILBOX) && trace.size > 0);
   });
   expect(true, `inbound trace ${inboundTrace.id}: ${inboundTrace.from} → ${inboundTrace.to}, ${inboundTrace.size} bytes`);
   const { body: detail } = await traceJmap(adminToken, [["x:Trace/get", { ids: [inboundTrace.id] }, "0"]]);

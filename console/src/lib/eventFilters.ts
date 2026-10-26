@@ -22,8 +22,9 @@ export function parseEventFilters(params: ParamReader, now: Date): EventFilters 
   if (/^[a-z0-9.-]{1,80}$/.test(type)) filters.typePrefix = type;
   const severity = params.get("severity");
   if (severity === "info" || severity === "warning" || severity === "error") filters.severity = severity;
-  const agent = params.get("agent")?.trim().toLowerCase() ?? "";
-  if (/^[^\s@]+@[^\s@]+$/.test(agent)) filters.address = agent;
+  // "agent" is the name links used before 0.4.
+  const mailbox = (params.get("mailbox") ?? params.get("agent"))?.trim().toLowerCase() ?? "";
+  if (/^[^\s@]+@[^\s@]+$/.test(mailbox)) filters.address = mailbox;
   const window = params.get("window") ?? "";
   if (Object.hasOwn(EVENT_WINDOWS, window)) filters.window = window as EventWindow;
   filters.since = new Date(now.getTime() - EVENT_WINDOWS[filters.window]);
@@ -35,7 +36,7 @@ export function eventFiltersQuery(filters: Omit<EventFilters, "since">): string 
   const params = new URLSearchParams();
   if (filters.typePrefix) params.set("type", filters.typePrefix);
   if (filters.severity) params.set("severity", filters.severity);
-  if (filters.address) params.set("agent", filters.address);
+  if (filters.address) params.set("mailbox", filters.address);
   if (filters.window !== "24h") params.set("window", filters.window);
   return params.toString();
 }

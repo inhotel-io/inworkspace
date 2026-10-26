@@ -9,26 +9,29 @@ Revised on 2026-10-26 (issue #8). The inWorkspace server now serves the console 
 console service is now an API, and the Google identity modes and server-rendered pages are
 gone.
 
+Revised again on 2026-10-26 for 0.4: the console is about mailboxes, not AI agents. It lists
+every mailbox on the server unless `MAILBOX_DOMAINS` narrows it, shows all of a mailbox's
+mail, drafts and Trash included, and reloads open pages so that new mail shows up.
+
 ## Purpose
 
-AI agents can work through ordinary inWorkspace mailboxes: guests and partners email an
-agent's address, an agent runtime reads the mailbox over JMAP, and the agent's reply is
-submitted from the same mailbox and filed in its Sent folder. The people responsible for
-those agents need to see what the agents receive, what they answer, and what the mail
-server is doing with that mail.
+People and services work through ordinary inWorkspace mailboxes. Whoever runs the server
+needs to see what each mailbox receives and sends, and what the mail server is doing with
+that mail.
 
 The console is a read-only web application for that oversight. The inWorkspace server
 serves it at `/console`, so operators find it on the same site as the web admin and sign
 in with the same account. It shows:
 
-- **Conversations** — each agent's threads with its counterparts, read live from the
-  agent's mailboxes, including what landed in Junk and which threads still await a reply.
+- **Conversations** — each mailbox's threads with its counterparts, read live from every
+  folder, including what landed in Junk, drafts, mail in Trash, and which threads still await
+  a reply. An open mailbox reloads by itself and marks what is new.
 - **Events** — what the mail server did: messages accepted, filed as junk, refused,
   queued, delivered or bounced, and authentication or abuse problems.
-- **Overview** — counts for the last 24 hours and per-agent activity.
+- **Overview** — counts for the last 24 hours and every mailbox with its activity.
 
-It is generic: it works with any inWorkspace (Stalwart-based) server and any set of agent
-mailboxes. A deployment is configuration only.
+It is generic: it works with any inWorkspace (Stalwart-based) server. A deployment is
+configuration only.
 
 ## Scope
 
@@ -38,13 +41,13 @@ viewed which conversation.
 
 Out of scope for this version:
 
-- Any action on mail or agents — reply, delete, move, retry, block, take over. The
-  console never writes to a mailbox.
+- Any action on mail — reply, delete, move, retry, block, take over. The console never
+  writes to a mailbox.
 - The server's own Enterprise telemetry (stored metrics, stored traces, live tracing).
   The console uses only the open-source event webhook and the JMAP protocol, and no code
   licensed only under `LicenseRef-SEL`.
-- Events from the agent runtime itself (why an agent did or did not reply). A generic
-  ingest API for runtime events is a possible follow-up.
+- Events from the programs that use a mailbox, such as why one did or did not reply. A
+  generic ingest API for such events is a possible follow-up.
 - Metrics charts, multi-tenant permissions, and full-text search across conversations.
 
 ## Architecture
@@ -114,19 +117,19 @@ Each unit has one purpose and is tested on its own.
 | `signature` | Verify `X-Signature`: base64 HMAC-SHA256 of the raw request body, compared in constant time. | — |
 | `eventTypes` | The subscribed event types, their severity, and the groups the overview counts. | — |
 | `normalize` | Turn one webhook event into an event row: type, time, severity, sender, recipients, addresses, remote IP, queue and message ids, dedupe hash, raw data. | `json`, `eventTypes` |
-| `eventStore` | Migrations, idempotent batch insert, filtered queries, overview counts, per-agent activity, retention prune. | Postgres |
+| `eventStore` | Migrations, idempotent batch insert, filtered queries, overview counts, per-mailbox activity, retention prune. | Postgres |
 | `ingest` | The ingest request handler: size limit, signature, parse, store, prune. | `signature`, `normalize`, `eventStore` |
 | `jmap` | Minimal JMAP client: session discovery and method calls, authenticated either as the console principal or as a mailbox through master-user login. Rejects any method not on its read-only allow-list. | — |
-| `directory` | The agent mailboxes: accounts whose address is an agent address, with display names. Cached for five minutes. | `jmap` |
+| `directory` | The listed mailboxes, with display names, and the listed domains. Reads the registry in gets no larger than the server's `maxObjectsInGet`. Cached for five minutes, and requests that arrive during a read share it. | `jmap` |
 | `conversations` | Build thread summaries and thread views from JMAP results: direction of each message, junk, automated and awaiting-reply flags. | — |
-| `mailbox` | Read one agent's mailbox through `jmap` and hand the results to `conversations`. | `jmap`, `conversations`, `sanitize` |
+| `mailbox` | Read one listed mailbox through `jmap` and hand the results to `conversations`. | `jmap`, `conversations`, `sanitize` |
 | `sanitize` | Turn an HTML email body into safe markup and plain text. | — |
 | `emailDocument` | Wrap sanitized markup in a document for a sandboxed frame, with a policy that blocks every remote resource. Shared with the web app. | — |
 | `auth` | Verify the operator's bearer token with the server: introspection, permissions and login. Check the required permission and the allow-list, and cache the result. | `config` |
 | `cors` | Cross-origin headers for the server's origin, and preflight answers. | — |
 | `apiRoute` | Wrap every API handler: role check, CORS, authentication, JSON errors, `no-store`. | `auth`, `cors` |
 | `uiBundle` | Build the shell zip the server downloads: the page with the settings, and the icon. It gets a version from its content. Also load the app's build: the entry module, generated from Vite's manifest, and the assets. | `config` |
-| `audit` | Write one structured log line for each conversation or thread view. | — |
+| `audit` | Write one structured log line for each mailbox or thread view. | — |
 
 The web app has its own units, all under `ui/src/`:
 
@@ -136,7 +139,8 @@ The web app has its own units, all under `ui/src/`:
 | `auth/session` | Start sign-in, finish it on the callback, and keep the tokens for the tab. Refresh the access token, and sign out. |
 | `api` | Call the console API with the access token. On 401, refresh once and retry, else sign in again. |
 | `settings` | Read the runtime settings the bundle carries in `index.html`, and the base path. |
-| pages and components | Overview, an agent's conversations, a thread, events, sign-in states. |
+| `useApi` | Load one API path. A page that watches for new mail reloads it on a timer while it is shown, keeps what it shows until the answer arrives, and marks those reads as automatic. |
+| pages and components | Overview, a mailbox's conversations, a thread, events, sign-in states. |
 
 ## Event ingest
 
@@ -174,7 +178,7 @@ reaches the console:
 - Mail stored: `message-ingest.ham`, `message-ingest.spam`, `message-ingest.duplicate`,
   `message-ingest.error`.
 - Mail queued: `queue.message-queued` (accepted from SMTP),
-  `queue.authenticated-message-queued` (submitted by an account, such as an agent reply),
+  `queue.authenticated-message-queued` (submitted by an account, such as a reply),
   `queue.rescheduled`, `queue.dsn-queued`, `queue.quota-exceeded`,
   `queue.rate-limit-exceeded`.
 - Delivery outcomes, one per recipient: `delivery.dsn-success`, `delivery.dsn-temp-fail`,
@@ -208,9 +212,10 @@ Severity is derived from the type, because the webhook does not send the level:
   every subscribed `smtp.*`, `auth.*` and `security.*` type.
 - `info` — every other type, including any type not listed in this document.
 
-An **agent address** is an address whose domain is in `AGENT_DOMAINS` and whose local part
-matches `AGENT_LOCALPART_PATTERN` when it is set, other than the console principal. An
-**agent** is a user account on the server whose address is an agent address.
+A **listed mailbox** is a user account on the server whose domain is in `MAILBOX_DOMAINS`
+(every domain on the server when that is empty, the default) and whose local part matches
+`MAILBOX_LOCALPART_PATTERN` when it is set, other than the console principal. The
+**listed domains** are those domains.
 
 ## Data model
 
@@ -238,15 +243,15 @@ create index events_addresses_idx on events using gin (addresses);
 
 `sender` is the lowercased `from` when it is an email address (a bounce's `<>` is not).
 `recipients` holds the lowercased email addresses in `to`. `addresses` holds `sender`,
-`recipients` and `accountName`, so that "events for this agent" is one indexed containment
+`recipients` and `accountName`, so that "events for this mailbox" is one indexed containment
 query. Migrations are applied in order at startup, under an advisory lock, and recorded in
 `schema_migrations`.
 
 Migration `002_events_account` adds `account_id bigint` (indexed where present): the
 server's numeric id of the account a `message-ingest.*` event stored the message in. Those
-events list every local recipient of the delivery in `to` — one message to two agents yields
-two events, each naming both — so counting by recipient would count it twice for each agent.
-The directory reads each agent's account id from the registry, whose ids are the same numbers
+events list every local recipient of the delivery in `to` — one message to two mailboxes
+yields two events, each naming both — so counting by recipient would count it twice for each.
+The directory reads each mailbox's account id from the registry, whose ids are the same numbers
 written in the server's base32 alphabet `abcdefghijklmnopqrstuvwxyz792013`.
 
 Retention: rows older than `EVENT_RETENTION_DAYS` (default 30) are deleted at most once per
@@ -254,10 +259,10 @@ hour per instance, during ingest requests.
 
 ## Conversations
 
-Nothing is copied. Each view reads the agent's mailbox through JMAP, authenticated with the
-master-user form `<agent address>%<console principal>` and the console principal's
-password. Only agents from the directory can be opened, so the console cannot be pointed at
-any other mailbox on the server.
+Nothing is copied. Each view reads the mailbox through JMAP, authenticated with the
+master-user form `<address>%<console principal>` and the console principal's password. Only
+listed mailboxes can be opened, so the console cannot be pointed at its own account or at a
+mailbox outside the listed domains.
 
 The principal needs the `Impersonate` permission, so a successful impersonation gives full
 access to the mailbox; the console therefore enforces read-only access itself: the `jmap`
@@ -266,18 +271,25 @@ plus `x:Domain/query`, `x:Domain/get`, `x:Account/query` and `x:Account/get` for
 directory, and refuses any other method before a request is made. Reading never changes
 keywords, so no message becomes seen.
 
-- **Thread list**: `Email/query` across every mailbox except Trash and Drafts, newest
+- **Thread list**: `Email/query` across every folder, Trash and Drafts included, newest
   first, collapsed by thread, 50 per page; then `Email/get` and `Thread/get`. Each row
-  shows the subject, the counterpart, the message count, the last activity and a status:
-  *junk* when the newest message is inbound and in Junk or marked `$junk`; *automated* when
-  the newest message is inbound and machine-generated (an `Auto-Submitted` header other
-  than `no`, or a `mailer-daemon` or `postmaster` sender); *awaiting reply* when the newest
-  message is inbound and neither junk nor automated; *answered* when it is outbound.
-- **Thread view**: every message of the thread in time order, marked inbound or outbound
-  (outbound when it is in Sent or sent by the agent), with sender, recipients, date, text
-  body, and the sanitized HTML body on request. A message in Drafts is labelled as a draft
-  that was never sent, and a message in Trash is marked as such. Attachments are listed by
-  name and size; they are not downloadable in this version.
+  shows the subject, the counterpart, the message count, the last activity and a status,
+  from the newest message: *in Trash* when it is in Trash; *draft* when it is a draft (in
+  Drafts, or marked `$draft` wherever it was moved); otherwise *junk* when it is inbound and
+  in Junk or marked `$junk`; *automated* when it is
+  inbound and machine-generated (an `Auto-Submitted` header other than `no`, or a
+  `mailer-daemon` or `postmaster` sender); *awaiting reply* when it is inbound and neither
+  junk nor automated; *answered* when it is outbound.
+- **New mail**: while a mailbox is shown, the web app reloads its page every 30 seconds.
+  On the first page, threads with activity after the newest it showed when it opened are
+  marked new. The reloads are logged like any view, marked as automatic.
+- **Direction**: a message is outbound when it is in Sent or is a draft, and inbound when
+  it is in Inbox or Junk, even if it claims the mailbox's own address as its sender. In any
+  other folder, a message from the mailbox's own address is outbound.
+- **Thread view**: every message of the thread in time order, marked inbound or outbound,
+  with sender, recipients, date, text body, and the sanitized HTML body on request. A draft
+  is labelled as never sent, and a message in Trash is marked as such. Attachments are listed
+  by name and size; they are not downloadable in this version.
 
 HTML bodies are sanitized by the API. The web app renders them in an `iframe` with an empty
 `sandbox` attribute (no scripts, no same-origin), whose document carries a content security
@@ -289,22 +301,24 @@ Counts over the last 24 hours, from the event store:
 
 | Count | Definition |
 | --- | --- |
-| Received | `message-ingest.ham` stored in an agent's account |
-| Filed as junk | `message-ingest.spam` stored in an agent's account |
-| Refused at SMTP | the subscribed inbound refusal types, when a recipient is in an agent domain or the event has no recipient |
-| Replies sent | `queue.authenticated-message-queued` sent by an agent |
-| Replies delivered | `delivery.dsn-success` sent by an agent |
-| Delivery problems | `delivery.failed`, `delivery.dsn-temp-fail`, `delivery.dsn-perm-fail`, `delivery.double-bounce`, `delivery.rcpt-to-rejected`, `delivery.rcpt-to-failed`, `delivery.message-rejected` sent by an agent |
+| Received | `message-ingest.ham` stored in a listed mailbox |
+| Filed as junk | `message-ingest.spam` stored in a listed mailbox |
+| Refused at SMTP | the subscribed inbound refusal types, when a recipient is in a listed domain or the event has no recipient |
+| Sent | `queue.authenticated-message-queued` sent by a listed mailbox |
+| Delivered | `delivery.dsn-success` sent by a listed mailbox |
+| Delivery problems | `delivery.failed`, `delivery.dsn-temp-fail`, `delivery.dsn-perm-fail`, `delivery.double-bounce`, `delivery.rcpt-to-rejected`, `delivery.rcpt-to-failed`, `delivery.message-rejected` sent by a listed mailbox |
 | Access problems | the subscribed `auth.*` and `security.*` types |
 
-Below the counts: one row per agent with its received, junk, replies-sent and error counts
-and its last activity, linking to its conversations; and the 20 most recent `error`
-events. When the agent directory cannot be read, the counts that depend on it show "—"
-instead of zero, next to an error panel.
+Below the counts: one row per listed mailbox with its received, junk, sent and error counts
+and its last activity, most recently active first, linking to its conversations; and the 20
+most recent `error` events. The page reloads every minute while it is shown, and marks
+mailboxes with activity since it opened. When the mailbox list cannot be read, the counts
+that depend on it show "—" instead of zero, next to an error panel. *Refused at SMTP* does
+too, unless `MAILBOX_DOMAINS` names the domains to match refusals against.
 
 ## Events view
 
-A table of events, newest first, filtered by type prefix, severity, agent and time window,
+A table of events, newest first, filtered by type prefix, severity, mailbox and time window,
 100 per page, with keyset paging. A live mode polls `GET /api/v1/events?after=<id>` every
 three seconds and prepends new rows. Each row expands to its full JSON.
 
@@ -316,11 +330,11 @@ needs a verified operator.
 | Path | Answer |
 | --- | --- |
 | `me` | The operator's login. |
-| `overview` | The 24-hour counts, the agents with their activity (or the directory error), and the 20 latest errors. |
-| `agents` | The agent directory: address and name. |
-| `agents/{address}/threads?position=` | One page of the agent's threads. 404 for an address outside the directory. |
-| `agents/{address}/threads/{threadId}` | Every message of the thread. 404 when the thread is not in that mailbox. |
-| `events?type=&severity=&agent=&window=&before=&after=` | Events, newest first. `before` pages back, `after` returns only newer events for live mode. |
+| `overview` | The 24-hour counts, the listed mailboxes with their activity (or the directory error), the listed domains, and the 20 latest errors. |
+| `mailboxes` | The listed mailboxes: address and name. |
+| `mailboxes/{address}/threads?position=&refresh=` | One page of the mailbox's threads. 404 for an address that is not listed. `refresh=1` marks a reload the web app made by itself. |
+| `mailboxes/{address}/threads/{threadId}` | Every message of the thread. 404 when the thread is not in that mailbox. |
+| `events?type=&severity=&mailbox=&window=&before=&after=` | Events, newest first. `before` pages back, `after` returns only newer events for live mode. `agent=` is read as `mailbox=`. |
 
 Errors are `{"error": {"code", "message"}}`:
 
@@ -329,7 +343,7 @@ Errors are `{"error": {"code", "message"}}`:
 | 400 | A bad parameter. |
 | 401 | Sign-in needed, or the token is expired or invalid. |
 | 403 | The account may not use the console. |
-| 404 | An unknown agent or thread. |
+| 404 | An unknown mailbox or thread. |
 | 429 | Too many token checks. |
 | 502 | A mailbox read failed at the server. |
 | 503 | The server could not check the token. |
@@ -438,8 +452,9 @@ server's own administration.
 **Other controls.**
 - `AUTH_MODE=none` is for local development only. It is refused when
   `NODE_ENV=production` unless `ALLOW_INSECURE_AUTH_NONE=1` is also set.
-- Every conversation and thread view writes an audit line: the operator's login, the agent,
-  the thread id and the time.
+- Every mailbox and thread view writes an audit line: the operator's login, the mailbox,
+  the thread id and the time. Reloads the web app makes by itself are marked `automatic`. The
+  web app says which those are, so the mark is a guide through the log, not proof.
 - The console never stores message bodies. Event rows hold addresses, IPs and ids, and
   expire with retention.
 - API responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and
@@ -456,8 +471,8 @@ server's own administration.
 | `JMAP_URL` | api | Origin of the inWorkspace server, such as `https://mail.example.com`. The web app runs on it. |
 | `JMAP_PRINCIPAL` | api | Login of the console principal. |
 | `JMAP_PRINCIPAL_SECRET` | api | Its password. |
-| `AGENT_DOMAINS` | api | Comma-separated domains whose accounts are agent mailboxes. |
-| `AGENT_LOCALPART_PATTERN` | api | Optional regular expression the whole local part must match. |
+| `MAILBOX_DOMAINS` | api | Optional comma-separated domains whose mailboxes the console lists; default: every domain on the server. Before 0.4, `AGENT_DOMAINS`. |
+| `MAILBOX_LOCALPART_PATTERN` | api | Optional regular expression the whole local part must match. Before 0.4, `AGENT_LOCALPART_PATTERN`. The old names are read only while neither new name is set. |
 | `PUBLIC_URL` | api | Origin at which browsers reach the api role, such as `https://console-api.example.com`. |
 | `AUTH_MODE` | api | `server` (default) or `none`. |
 | `OPERATOR_PERMISSION` | api | The server permission an operator needs; default `impersonate`. |
@@ -505,10 +520,10 @@ does the same idempotently — :
   Postgres refuses are logged and skipped.
 - API: the statuses listed under [API](#api). A failed JMAP call is a 502 for that request
   only. The overview still answers when the directory fails, with the error in place of the
-  agent list. An unknown agent or thread is a 404, and no mailbox is opened.
+  mailbox list. An unknown mailbox or thread is a 404, and no mailbox is opened.
 - Web app:
   - A failed request shows an error panel where its data would be, and the rest of the
-    page still renders.
+    page still renders. A failed automatic reload keeps what is shown and says since when.
   - A 401 refreshes the access token once and retries, then starts sign-in again.
   - A 403 explains which permission the account lacks, and offers to sign out.
 - Startup fails when the configuration is invalid, the migrations cannot be applied, or (in
@@ -524,18 +539,21 @@ does the same idempotently — :
 - Integration tests for `eventStore` against a real Postgres: migrations, dedupe, filters,
   counts, retention.
 - An end-to-end run against a real inWorkspace server in Docker:
-  1. Create two agent mailboxes, a runtime principal, a plain user, the console principal
-     and the webhook.
+  1. Create two domains with their mailboxes, one of them an operator's with `impersonate`,
+     a plain user, the console principal and the webhook.
   2. Register the OAuth client and the web application. Confirm that the server ignores the
      record until Update apps, then serves the shell at `/console`. Confirm that the entry
      module and an asset load from the API with CORS for the server's origin.
-  3. Send messages over SMTP and reply from an agent mailbox over JMAP.
+  3. Send messages over SMTP. Over JMAP, reply from a mailbox, and create a draft, a message
+     in Trash, a draft thrown in Trash, and spam in Junk that claims the mailbox's own address.
   4. Confirm that the shell is also served on the callback path, and that registering the same
      shell again changes nothing.
   5. Sign in as the recovery administrator through the server's real `/api/auth` and
      `/auth/token` endpoints.
-  6. Confirm that the API returns the conversation with an inbound and an outbound message,
-     and the events.
+  6. Confirm that the API lists every mailbox of both domains but not its own account,
+     returns the conversation with an inbound and an outbound message, marks each of the
+     other messages for what it is, and returns the events. Confirm that each mailbox read is logged
+     once, with an automatic reload marked as such.
   7. Confirm that the API refuses a missing or invalid token with 401 and the plain user with
      403, and answers preflights only for the server's origin.
 
