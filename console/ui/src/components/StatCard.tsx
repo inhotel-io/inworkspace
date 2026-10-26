@@ -12,7 +12,7 @@ export function StatCard({ label, value, tone = "neutral" }: { label: string; va
     <div className="rounded-lg border border-border bg-surface p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-text-muted">{label}</p>
       {value === null ? (
-        <p className="mt-2 text-3xl font-semibold text-text-muted" title="Unavailable without the agent list">
+        <p className="mt-2 text-3xl font-semibold text-text-muted" title="Unavailable without the mailbox list">
           —
         </p>
       ) : (

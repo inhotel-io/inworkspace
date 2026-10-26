@@ -31,6 +31,20 @@ describe("summarizeThreads", () => {
     expect(summaries[0]).toMatchObject({ subject: "Re: Parking at the hotel", lastDirection: "outbound", lastActivity: "2026-10-25T11:20:29Z" });
   });
 
+  it("marks a thread whose newest message is deleted or a draft", () => {
+    const [deleted, draft] = summarizeThreads(
+      [
+        { ...fixture.latest[3]!, mailboxIds: { b: true } },
+        { ...fixture.latest[0]!, mailboxIds: { d: true } },
+      ],
+      fixture.threads,
+      AGENT,
+      roles,
+    );
+    expect(deleted?.status).toBe("deleted");
+    expect(draft?.status).toBe("draft");
+  });
+
   it("names threads without a subject", () => {
     const [summary] = summarizeThreads([{ ...fixture.latest[3]!, subject: "  " }], fixture.threads, AGENT, roles);
     expect(summary?.subject).toBe("(no subject)");
@@ -38,7 +52,7 @@ describe("summarizeThreads", () => {
 });
 
 describe("directionOf", () => {
-  it("treats Sent or the agent's own address as outbound", () => {
+  it("treats Sent or the mailbox's own address as outbound", () => {
     expect(directionOf(fixture.latest[0]!, AGENT, roles)).toBe("outbound");
     expect(directionOf({ ...fixture.latest[0]!, mailboxIds: { a: true } }, AGENT, roles)).toBe("outbound");
     expect(directionOf(fixture.latest[3]!, AGENT, roles)).toBe("inbound");

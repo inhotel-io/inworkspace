@@ -104,7 +104,7 @@ describe("createApiClient", () => {
   it("refreshes once for requests that fail together", async () => {
     const server = servers({ expired: ["access-1"] });
     const { get } = clientFor(memoryStore({ accessToken: "access-1", refreshToken: "refresh-1", expiresAt: NOW + 3_600_000 }), server);
-    await Promise.all([get("me"), get("overview"), get("agents")]);
+    await Promise.all([get("me"), get("overview"), get("mailboxes")]);
     expect(server.seen.filter((call) => call.url === `${ORIGIN}/auth/token`)).toHaveLength(1);
   });
 });

@@ -5,6 +5,8 @@ const STATUS: Record<ThreadStatus, { label: string; className: string }> = {
   junk: { label: "Junk", className: "bg-error-soft text-error" },
   automated: { label: "Automated", className: "bg-surface-sunken text-text-muted" },
   answered: { label: "Answered", className: "bg-brand-soft text-brand" },
+  draft: { label: "Draft", className: "bg-surface-sunken text-text-muted" },
+  deleted: { label: "In Trash", className: "bg-surface-sunken text-text-muted" },
 };
 
 export function ThreadStatusChip({ status }: { status: ThreadStatus }) {

@@ -1,5 +1,5 @@
 import { Link, useSearchParams } from "react-router";
-import type { AgentsResponse, EventsResponse } from "@/lib/apiTypes";
+import type { EventsResponse, MailboxesResponse } from "@/lib/apiTypes";
 import { EVENT_TYPE_PREFIXES, EVENT_WINDOWS, eventFiltersQuery, parseEventFilters } from "@/lib/eventFilters";
 import { parseEventId } from "@/lib/params";
 import { EventRow } from "../components/EventRow";
@@ -12,7 +12,7 @@ import { useDocumentTitle } from "../useDocumentTitle";
 
 /** The API computes the window's start itself; this only parses the filters. */
 const UNUSED_NOW = new Date(0);
-const FILTER_NAMES = ["type", "severity", "agent", "window"] as const;
+const FILTER_NAMES = ["type", "severity", "mailbox", "window"] as const;
 
 export function EventsPage() {
   useDocumentTitle("Events");
@@ -22,7 +22,7 @@ export function EventsPage() {
   const filterQuery = eventFiltersQuery(filters);
   const before = parseEventId(search.get("before") ?? undefined) ?? 0;
   const events = useApi<EventsResponse>(`events?${[filterQuery, before > 0 ? `before=${before}` : ""].filter(Boolean).join("&")}`);
-  const directory = useApi<AgentsResponse>("agents");
+  const directory = useApi<MailboxesResponse>("mailboxes");
 
   const apply = (form: HTMLFormElement) => {
     const data = new FormData(form);
@@ -39,7 +39,7 @@ export function EventsPage() {
     <main className="space-y-6">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Events</h1>
-        <p className="mt-1 text-sm text-text-muted">What the mail server did with agent mail, newest first.</p>
+        <p className="mt-1 text-sm text-text-muted">What the mail server did with mail, newest first.</p>
       </header>
 
       <form
@@ -74,18 +74,18 @@ export function EventsPage() {
           </select>
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-text-muted">Agent</span>
+          <span className="text-xs font-medium text-text-muted">Mailbox</span>
           {directory.status === "ready" ? (
-            <select name="agent" defaultValue={filters.address ?? ""} className="rounded-md border border-border bg-surface px-2 py-1.5">
-              <option value="">All agents</option>
-              {directory.data.agents.map((agent) => (
-                <option key={agent.address} value={agent.address}>
-                  {agent.name ? `${agent.name} (${agent.address})` : agent.address}
+            <select name="mailbox" defaultValue={filters.address ?? ""} className="rounded-md border border-border bg-surface px-2 py-1.5">
+              <option value="">All mailboxes</option>
+              {directory.data.mailboxes.map((mailbox) => (
+                <option key={mailbox.address} value={mailbox.address}>
+                  {mailbox.name ? `${mailbox.name} (${mailbox.address})` : mailbox.address}
                 </option>
               ))}
             </select>
           ) : (
-            <input name="agent" defaultValue={filters.address ?? ""} placeholder="address" className="rounded-md border border-border bg-surface px-2 py-1.5" />
+            <input name="mailbox" defaultValue={filters.address ?? ""} placeholder="address" className="rounded-md border border-border bg-surface px-2 py-1.5" />
           )}
         </label>
         <label className="flex flex-col gap-1">

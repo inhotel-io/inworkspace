@@ -4,7 +4,7 @@ import type { StoredEvent } from "./eventStore";
 
 export type { StoredEvent, ThreadMessage, ThreadSummary };
 
-export interface AgentRef {
+export interface MailboxRef {
   address: string;
   name: string | null;
 }
@@ -13,40 +13,41 @@ export interface MeResponse {
   login: string;
 }
 
-/** The 24-hour counts; null when the count needs the agent list and it could not be read. */
+/** The 24-hour counts; null when the count needs the mailbox list and it could not be read. */
 export interface OverviewTotals {
   received: number | null;
   junk: number | null;
   refused: number;
-  repliesSent: number | null;
-  repliesDelivered: number | null;
+  sent: number | null;
+  delivered: number | null;
   deliveryProblems: number | null;
   accessProblems: number;
 }
 
-export interface AgentOverview extends AgentRef {
+export interface MailboxOverview extends MailboxRef {
   received: number;
   junk: number;
-  repliesSent: number;
+  sent: number;
   errors: number;
   lastActivity: string | null;
 }
 
 export interface OverviewResponse {
   totals: OverviewTotals;
-  /** Null when the agent directory could not be read; directoryError says why. */
-  agents: AgentOverview[] | null;
+  /** Null when the mailbox list could not be read; directoryError says why. */
+  mailboxes: MailboxOverview[] | null;
   directoryError: string | null;
-  agentDomains: string[];
+  /** The domains whose mailboxes are listed. */
+  domains: string[];
   recentErrors: StoredEvent[];
 }
 
-export interface AgentsResponse {
-  agents: AgentRef[];
+export interface MailboxesResponse {
+  mailboxes: MailboxRef[];
 }
 
 export interface ThreadsResponse {
-  agent: AgentRef;
+  mailbox: MailboxRef;
   threads: ThreadSummary[];
   total: number;
   position: number;
@@ -54,7 +55,7 @@ export interface ThreadsResponse {
 }
 
 export interface ThreadResponse {
-  agent: AgentRef;
+  mailbox: MailboxRef;
   messages: ThreadMessage[];
 }
 

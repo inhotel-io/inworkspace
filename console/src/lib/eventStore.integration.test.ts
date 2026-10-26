@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentActivity, insertEvents, overviewCounts, pruneEvents, queryEvents } from "./eventStore";
+import { insertEvents, mailboxActivity, overviewCounts, pruneEvents, queryEvents } from "./eventStore";
 import { migrate } from "./migrations";
 import { normalizeEvent, parseBatch, type EventRow } from "./normalize";
 
@@ -9,8 +9,8 @@ const url = process.env.TEST_DATABASE_URL;
 if (!url) throw new Error("TEST_DATABASE_URL is required for integration tests");
 
 const pool = new Pool({ connectionString: url });
-const AGENT = "a21i3v9v@agents.example.test";
-const OTHER_AGENT = "a000001e@agents.example.test";
+const MAILBOX = "a21i3v9v@agents.example.test";
+const OTHER_MAILBOX = "a000001e@agents.example.test";
 const SINCE = new Date("2026-10-25T00:00:00Z");
 const rows = parseBatch(readFileSync(new URL("./__fixtures__/webhook-batch.json", import.meta.url), "utf8")).map(normalizeEvent);
 
@@ -18,7 +18,7 @@ function ingest(type: string, accountId: number, at: string): EventRow {
   return normalizeEvent({
     createdAt: at,
     type,
-    data: { accountId, messageId: "shared@example.com", from: "jane@example.com", to: [AGENT, OTHER_AGENT] },
+    data: { accountId, messageId: "shared@example.com", from: "jane@example.com", to: [MAILBOX, OTHER_MAILBOX] },
   });
 }
 
@@ -62,7 +62,7 @@ describe("event store", () => {
     expect(reply).toMatchObject({
       type: "queue.authenticated-message-queued",
       severity: "info",
-      sender: AGENT,
+      sender: MAILBOX,
       recipients: ["jane@example.com"],
       queueId: "336901658562789888",
       eventAt: "2026-10-25T11:20:29.000Z",
@@ -101,64 +101,64 @@ describe("event store", () => {
     await insertEvents(pool, rows);
     const counts = await overviewCounts(pool, {
       since: SINCE,
-      agentAddresses: [AGENT],
-      agentAccountIds: [1],
-      agentDomains: ["agents.example.test"],
+      addresses: [MAILBOX],
+      accountIds: [1],
+      domains: ["agents.example.test"],
     });
     expect(counts).toEqual({
       received: 1,
       junk: 1,
       refused: 1,
-      repliesSent: 1,
-      repliesDelivered: 0,
+      sent: 1,
+      delivered: 0,
       deliveryProblems: 1,
       accessProblems: 0,
     });
   });
 
-  it("counts a message to two agents once in each mailbox", async () => {
+  it("counts a message to two mailboxes once in each", async () => {
     await insertEvents(pool, [ingest("message-ingest.ham", 1, "2026-10-25T11:30:00Z"), ingest("message-ingest.spam", 2, "2026-10-25T11:30:00Z")]);
     const counts = await overviewCounts(pool, {
       since: SINCE,
-      agentAddresses: [AGENT, OTHER_AGENT],
-      agentAccountIds: [1, 2],
-      agentDomains: ["agents.example.test"],
+      addresses: [MAILBOX, OTHER_MAILBOX],
+      accountIds: [1, 2],
+      domains: ["agents.example.test"],
     });
     expect(counts).toMatchObject({ received: 1, junk: 1 });
-    const activity = await agentActivity(pool, {
+    const activity = await mailboxActivity(pool, {
       since: SINCE,
-      agents: [
-        { address: AGENT, accountId: 1 },
-        { address: OTHER_AGENT, accountId: 2 },
+      mailboxes: [
+        { address: MAILBOX, accountId: 1 },
+        { address: OTHER_MAILBOX, accountId: 2 },
       ],
     });
     expect(activity.map((row) => [row.address, row.received, row.junk])).toEqual([
-      [OTHER_AGENT, 0, 1],
-      [AGENT, 1, 0],
+      [OTHER_MAILBOX, 0, 1],
+      [MAILBOX, 1, 0],
     ]);
   });
 
-  it("reports activity per agent, including agents without events", async () => {
+  it("reports activity per mailbox, including mailboxes without events", async () => {
     await insertEvents(pool, rows);
-    const activity = await agentActivity(pool, {
+    const activity = await mailboxActivity(pool, {
       since: SINCE,
-      agents: [
-        { address: AGENT, accountId: 1 },
-        { address: OTHER_AGENT, accountId: 2 },
+      mailboxes: [
+        { address: MAILBOX, accountId: 1 },
+        { address: OTHER_MAILBOX, accountId: 2 },
       ],
     });
     expect(activity).toEqual([
-      { address: OTHER_AGENT, received: 0, junk: 0, repliesSent: 0, errors: 0, lastActivity: null },
-      { address: AGENT, received: 1, junk: 1, repliesSent: 1, errors: 1, lastActivity: "2026-10-25T11:20:29.000Z" },
+      { address: OTHER_MAILBOX, received: 0, junk: 0, sent: 0, errors: 0, lastActivity: null },
+      { address: MAILBOX, received: 1, junk: 1, sent: 1, errors: 1, lastActivity: "2026-10-25T11:20:29.000Z" },
     ]);
-    expect(await agentActivity(pool, { since: SINCE, agents: [] })).toEqual([]);
+    expect(await mailboxActivity(pool, { since: SINCE, mailboxes: [] })).toEqual([]);
   });
 
   it("prunes events older than the retention", async () => {
     const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
     await insertEvents(pool, [
-      normalizeEvent({ createdAt: at(40), type: "message-ingest.ham", data: { to: AGENT } }),
-      normalizeEvent({ createdAt: at(1), type: "message-ingest.ham", data: { to: AGENT } }),
+      normalizeEvent({ createdAt: at(40), type: "message-ingest.ham", data: { to: MAILBOX } }),
+      normalizeEvent({ createdAt: at(1), type: "message-ingest.ham", data: { to: MAILBOX } }),
     ]);
     expect(await pruneEvents(pool, 30)).toBe(1);
     expect(await queryEvents(pool, { limit: 10 })).toHaveLength(1);

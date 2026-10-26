@@ -37,7 +37,7 @@ export interface MailboxRoles {
 }
 
 export type Direction = "inbound" | "outbound";
-export type ThreadStatus = "awaiting-reply" | "junk" | "automated" | "answered";
+export type ThreadStatus = "awaiting-reply" | "junk" | "automated" | "answered" | "draft" | "deleted";
 
 export interface ThreadSummary {
   threadId: string;
@@ -85,9 +85,9 @@ function lowercase(address: EmailAddress): EmailAddress {
   return { name: address.name, email: address.email.toLowerCase() };
 }
 
-export function directionOf(email: JmapEmail, agentAddress: string, roles: MailboxRoles): Direction {
+export function directionOf(email: JmapEmail, address: string, roles: MailboxRoles): Direction {
   if (roles.sent !== null && email.mailboxIds[roles.sent]) return "outbound";
-  return email.from?.[0]?.email.toLowerCase() === agentAddress ? "outbound" : "inbound";
+  return email.from?.[0]?.email.toLowerCase() === address ? "outbound" : "inbound";
 }
 
 export function isJunk(email: JmapEmail, roles: MailboxRoles): boolean {
@@ -106,15 +106,18 @@ export function isAutomated(email: JmapEmail): boolean {
 export function summarizeThreads(
   latest: readonly JmapEmail[],
   threads: readonly { id: string; emailIds: string[] }[],
-  agentAddress: string,
+  address: string,
   roles: MailboxRoles,
 ): ThreadSummary[] {
   const counts = new Map(threads.map((thread) => [thread.id, thread.emailIds.length]));
   return latest.map((email) => {
-    const direction = directionOf(email, agentAddress, roles);
+    const direction = directionOf(email, address, roles);
     const counterpart = direction === "inbound" ? email.from?.[0] : email.to?.[0];
     let status: ThreadStatus = "answered";
-    if (direction === "inbound") {
+    // The newest message's folder comes first: a deleted or draft one says more than its direction.
+    if (roles.trash !== null && email.mailboxIds[roles.trash]) status = "deleted";
+    else if (roles.drafts !== null && email.mailboxIds[roles.drafts]) status = "draft";
+    else if (direction === "inbound") {
       if (isJunk(email, roles)) status = "junk";
       else if (isAutomated(email)) status = "automated";
       else status = "awaiting-reply";
@@ -140,7 +143,7 @@ function partValues(email: JmapEmail, parts: readonly BodyPart[]): string[] {
 
 export function buildThread(
   emails: readonly JmapEmail[],
-  agentAddress: string,
+  address: string,
   roles: MailboxRoles,
   renderers: BodyRenderers,
 ): ThreadMessage[] {
@@ -151,7 +154,7 @@ export function buildThread(
       const html = htmlParts.length > 0 ? renderers.sanitizeHtml(partValues(email, htmlParts).join("\n")) : null;
       let text = partValues(email, email.textBody ?? []).join("\n\n").trim();
       if (!text && html) text = renderers.htmlToText(html);
-      const direction = directionOf(email, agentAddress, roles);
+      const direction = directionOf(email, address, roles);
       return {
         id: email.id,
         direction,

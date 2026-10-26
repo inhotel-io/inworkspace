@@ -30,17 +30,17 @@ export interface OverviewCounts {
   received: number;
   junk: number;
   refused: number;
-  repliesSent: number;
-  repliesDelivered: number;
+  sent: number;
+  delivered: number;
   deliveryProblems: number;
   accessProblems: number;
 }
 
-export interface AgentActivity {
+export interface MailboxActivity {
   address: string;
   received: number;
   junk: number;
-  repliesSent: number;
+  sent: number;
   errors: number;
   lastActivity: string | null;
 }
@@ -182,10 +182,10 @@ export async function queryEvents(pool: Pool, query: EventQuery): Promise<Stored
   return ascending ? events.reverse() : events;
 }
 
-/** Received and junk count messages stored in agent mailboxes, attributed by account rather than by listed recipient. */
+/** Received and junk count messages stored in listed mailboxes, attributed by account rather than by listed recipient. */
 export async function overviewCounts(
   pool: Pool,
-  params: { since: Date; agentAddresses: readonly string[]; agentAccountIds: readonly number[]; agentDomains: readonly string[] },
+  params: { since: Date; addresses: readonly string[]; accountIds: readonly number[]; domains: readonly string[] },
 ): Promise<OverviewCounts> {
   const result = await pool.query(
     `select
@@ -195,20 +195,20 @@ export async function overviewCounts(
          cardinality(recipients) = 0
          or exists (select 1 from unnest(recipients) as r(address) where split_part(r.address, '@', 2) = any($3::text[]))
        )) as refused,
-       count(*) filter (where type = 'queue.authenticated-message-queued' and sender = any($2::text[])) as replies_sent,
-       count(*) filter (where type = 'delivery.dsn-success' and sender = any($2::text[])) as replies_delivered,
+       count(*) filter (where type = 'queue.authenticated-message-queued' and sender = any($2::text[])) as sent,
+       count(*) filter (where type = 'delivery.dsn-success' and sender = any($2::text[])) as delivered,
        count(*) filter (where type = any($5::text[]) and sender = any($2::text[])) as delivery_problems,
        count(*) filter (where type = any($6::text[])) as access_problems
      from events
      where event_at >= $1`,
     [
       params.since,
-      [...params.agentAddresses],
-      [...params.agentDomains],
+      [...params.addresses],
+      [...params.domains],
       [...REFUSAL_EVENT_TYPES],
       [...DELIVERY_PROBLEM_EVENT_TYPES],
       [...ACCESS_EVENT_TYPES],
-      [...params.agentAccountIds],
+      [...params.accountIds],
     ],
   );
   const row = result.rows[0] as Record<string, string>;
@@ -216,24 +216,24 @@ export async function overviewCounts(
     received: Number(row.received),
     junk: Number(row.junk),
     refused: Number(row.refused),
-    repliesSent: Number(row.replies_sent),
-    repliesDelivered: Number(row.replies_delivered),
+    sent: Number(row.sent),
+    delivered: Number(row.delivered),
     deliveryProblems: Number(row.delivery_problems),
     accessProblems: Number(row.access_problems),
   };
 }
 
-/** One row per agent, in address order; the last activity looks across the whole retention window. */
-export async function agentActivity(
+/** One row per mailbox, in address order; the last activity looks across the whole retention window. */
+export async function mailboxActivity(
   pool: Pool,
-  params: { since: Date; agents: readonly { address: string; accountId: number | null }[] },
-): Promise<AgentActivity[]> {
-  if (params.agents.length === 0) return [];
+  params: { since: Date; mailboxes: readonly { address: string; accountId: number | null }[] },
+): Promise<MailboxActivity[]> {
+  if (params.mailboxes.length === 0) return [];
   const result = await pool.query(
     `select a.address,
        count(e.id) filter (where e.type = 'message-ingest.ham' and e.account_id = a.account_id) as received,
        count(e.id) filter (where e.type = 'message-ingest.spam' and e.account_id = a.account_id) as junk,
-       count(e.id) filter (where e.type = 'queue.authenticated-message-queued' and e.sender = a.address) as replies_sent,
+       count(e.id) filter (where e.type = 'queue.authenticated-message-queued' and e.sender = a.address) as sent,
        count(e.id) filter (where e.severity = 'error') as errors,
        latest.last_activity
      from unnest($2::text[], $3::bigint[]) as a(address, account_id)
@@ -243,13 +243,13 @@ export async function agentActivity(
      ) latest on true
      group by a.address, latest.last_activity
      order by a.address`,
-    [params.since, params.agents.map((agent) => agent.address), params.agents.map((agent) => agent.accountId)],
+    [params.since, params.mailboxes.map((mailbox) => mailbox.address), params.mailboxes.map((mailbox) => mailbox.accountId)],
   );
   return result.rows.map((row) => ({
     address: row.address as string,
     received: Number(row.received),
     junk: Number(row.junk),
-    repliesSent: Number(row.replies_sent),
+    sent: Number(row.sent),
     errors: Number(row.errors),
     lastActivity: row.last_activity ? (row.last_activity as Date).toISOString() : null,
   }));

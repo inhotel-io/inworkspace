@@ -13,13 +13,13 @@ export function ThreadPage() {
   useDocumentTitle("Conversation");
   const { address = "", threadId = "" } = useParams();
   const { settings } = useConsole();
-  const result = useApi<ThreadResponse>(`agents/${encodeURIComponent(address)}/threads/${encodeURIComponent(threadId)}`);
+  const result = useApi<ThreadResponse>(`mailboxes/${encodeURIComponent(address)}/threads/${encodeURIComponent(threadId)}`);
 
   return (
     <main className="space-y-6">
       <header>
-        <Link to={`/agents/${encodeURIComponent(address)}`} className="text-xs font-medium text-brand hover:underline">
-          ← {result.status === "ready" ? (result.data.agent.name ?? address) : address}
+        <Link to={`/mailboxes/${encodeURIComponent(address)}`} className="text-xs font-medium text-brand hover:underline">
+          ← {result.status === "ready" ? (result.data.mailbox.name ?? address) : address}
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">
           {result.status === "ready" ? (result.data.messages[0]?.subject ?? "Conversation") : "Conversation"}
@@ -44,7 +44,7 @@ export function ThreadPage() {
 
 function labelOf(message: ThreadMessage): string {
   if (message.draft) return "Draft, not sent";
-  return message.direction === "outbound" ? "Agent reply" : "Inbound";
+  return message.direction === "outbound" ? "Sent" : "Received";
 }
 
 function Message({ message, timeZone }: { message: ThreadMessage; timeZone: string }) {

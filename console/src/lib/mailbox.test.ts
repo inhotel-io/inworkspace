@@ -19,7 +19,7 @@ function fakeClient(answer: (calls: readonly Invocation[]) => Invocation[]) {
 }
 
 describe("listThreads", () => {
-  it("logs in as the agent, hides Trash and Drafts, and keeps the query order", async () => {
+  it("logs in as the mailbox, reads every folder, and keeps the query order", async () => {
     const client = fakeClient((calls) => {
       if (calls[0]![0] === "Mailbox/get") return [["Mailbox/get", { list: fixture.mailboxes }, "m"]];
       return [
@@ -31,7 +31,8 @@ describe("listThreads", () => {
     const page = await listThreads(client, PRINCIPAL, AGENT, 0);
     expect(client.session).toHaveBeenCalledWith({ username: `${AGENT}%console@agents.example.test`, password: "secret" });
     const query = client.call.mock.calls[1]![2][0]!;
-    expect(query[1]).toMatchObject({ accountId: "b", filter: { inMailboxOtherThan: ["b", "d"] }, collapseThreads: true, position: 0, limit: 50 });
+    expect(query[1]).toMatchObject({ accountId: "b", collapseThreads: true, position: 0, limit: 50 });
+    expect(query[1]).not.toHaveProperty("filter");
     expect(page.total).toBe(4);
     expect(page.threads.map((thread) => thread.threadId)).toEqual(["d", "i", "g", "b"]);
   });
